@@ -1,0 +1,32 @@
+# Web Framework & Server
+fastapi
+uvicorn[standard]
+requests
+aiofiles
+
+# LLM & LangChain Core
+langchain
+langchain-core
+langchain-community # <-- THIS WAS MISSING
+langchain-google-genai
+langchain-openai
+
+# LangChain Integrations (Latest Versions)
+langchain-chroma
+langchain-huggingface
+langchain-unstructured
+
+# Document Processing & OCR
+unstructured[pdf,ocr]
+pytesseract
+pypdf
+
+# Vector Store & Embeddings
+chromadb
+sentence-transformers
+
+# Configuration
+python-dotenv
+
+# Frontend (For local testing)
+streamlit
