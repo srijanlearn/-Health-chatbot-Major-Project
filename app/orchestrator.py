@@ -8,13 +8,14 @@ into focused steps — each step is narrow, well-defined,
 and optimised for small model performance.
 
 Pipeline:
-  1. Detect language (rule-based)
+  1. Detect language (rule-based, instant)
   2. Check for emergencies (keyword-based, instant)
   3. Classify intent (fast model, <100ms)
-  4. Route to handler (keyword rules, LLM fallback)
-  5. Retrieve context (hybrid BM25 + vector)
-  6. Generate answer (quality model, optimised prompt)
-  7. Apply safety guardrails (disclaimers, warnings)
+  4. Check knowledge graph (SQLite, instant — skips LLM if found)
+  5. Route to handler (keyword rules, LLM fallback)
+  6. Retrieve + Rerank context (hybrid BM25+vector, cross-encoder)
+  7. Generate answer (quality model, optimised prompt)
+  8. Apply safety guardrails (disclaimers, warnings)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from .llm_engine import LLMEngine
+from .knowledge.graph import KnowledgeGraph
 from .prompts.intent_classifier import (
     INTENT_CATEGORIES,
     INTENT_SYSTEM_PROMPT,
@@ -91,8 +93,9 @@ class Orchestrator:
     # Intents that get direct responses (no LLM needed)
     STATIC_INTENTS = {"greeting", "document_upload"}
 
-    def __init__(self, engine: LLMEngine) -> None:
+    def __init__(self, engine: LLMEngine, knowledge_graph: Optional[KnowledgeGraph] = None) -> None:
         self.engine = engine
+        self.knowledge_graph = knowledge_graph
         logger.info("Orchestrator initialised with %r", engine)
 
     # ── Main entry point ───────────────────────────────────────────────────────
@@ -160,7 +163,20 @@ class Orchestrator:
             "ms": _ms(t0),
         })
 
-        # ── Step 4: Handle static intents (no LLM needed) ─────────────────────
+        # ── Step 4: Check knowledge graph (instant, no LLM) ───────────────────
+        t0 = time.time()
+        if self.knowledge_graph and intent not in self.STATIC_INTENTS:
+            kg_answer = self.knowledge_graph.query(message)
+            if kg_answer:
+                steps.append({"step": "knowledge_graph", "hit": True, "ms": _ms(t0)})
+                result.response = kg_answer
+                result.route = "knowledge_graph"
+                result.latency_ms = _ms(start)
+                result.steps = steps
+                return result
+        steps.append({"step": "knowledge_graph", "hit": False, "ms": _ms(t0)})
+
+        # ── Step 5: Handle static intents (no LLM needed) ─────────────────────
         if intent == "greeting":
             result.response = self._greeting_response(is_new_user, result.language)
             result.route = "static"
