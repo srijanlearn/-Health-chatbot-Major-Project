@@ -276,9 +276,12 @@ class KnowledgeGraph:
     def _query_facts(self, query: str) -> Optional[str]:
         """Search IRDAI/PMJAY facts using full-text search."""
         cur = self._conn.cursor()
+        # Strip punctuation so FTS5 doesn't choke on "surgery?" etc.
+        import re
+        clean = re.sub(r"[^\w\s]", " ", query)
         # Clean query for FTS
         fts_query = " OR ".join(
-            w for w in query.split()
+            w for w in clean.split()
             if len(w) > 2 and w not in ("what", "is", "the", "for", "how", "does", "are", "can", "about")
         )
         if not fts_query:
@@ -310,18 +313,20 @@ class KnowledgeGraph:
 
     def _query_medicines(self, query: str) -> Optional[str]:
         """Search generic medicine alternatives."""
+        import re
+        clean = re.sub(r"[^\w\s]", " ", query)
         cur = self._conn.cursor()
 
         # Direct brand name search first
         cur.execute(
             "SELECT * FROM medicines WHERE LOWER(brand_name) LIKE ? OR LOWER(generic_name) LIKE ? LIMIT 5",
-            (f"%{query}%", f"%{query}%"),
+            (f"%{clean}%", f"%{clean}%"),
         )
         rows = cur.fetchall()
 
         if not rows:
             # Try FTS
-            fts_query = " OR ".join(w for w in query.split() if len(w) > 2)
+            fts_query = " OR ".join(w for w in clean.split() if len(w) > 2)
             if not fts_query:
                 return None
             try:
