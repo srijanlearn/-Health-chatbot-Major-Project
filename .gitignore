@@ -1,12 +1,66 @@
+# ===========================
 # Python
+# ===========================
 __pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# ===========================
+# Virtual Environments
+# ===========================
 venv/
-*.pyc
+.venv/
+.venv311/
+env/
+ENV/
 
-# Environment
+# ===========================
+# Environment Variables
+# ===========================
 .env
+!.env.example
 
-# IDEs
+# ===========================
+# IDEs & Editors
+# ===========================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
+# ===========================
+# OS Files
+# ===========================
+.DS_Store
+Thumbs.db
+
+# ===========================
+# Project-Specific Data
+# ===========================
+# Vector DB (auto-generated, large)
+db/
+
+# Downloaded files (runtime artifacts)
+downloaded_files/
+downloaded_images/
+
+# User sessions (runtime data)
+sessions/
+
+# ===========================
+# Build & Dist
+# ===========================
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ===========================
+# Logs
+# ===========================
+*.log
+logs/

@@ -3,7 +3,8 @@
 import os
 import requests
 import uuid
-from typing import List
+import base64
+from typing import List, Optional
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -25,6 +26,7 @@ DB_BASE_PATH = "./db"
 class HackRxRequest(BaseModel):
     documents: str = Field(...)
     questions: List[str] = Field(...)
+    is_base64: Optional[bool] = Field(default=False)
 
 class HackRxResponse(BaseModel):
     answers: List[str]
@@ -44,6 +46,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="HackRx 6.0 Submission API", lifespan=lifespan)
 
+# --- Health Check Endpoint ---
+@app.get("/hackrx/health", tags=["Health"])
+async def health_check():
+    return {"status": "healthy", "message": "Backend is running"}
+
 # --- Helper function ---
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
@@ -51,16 +58,30 @@ def format_docs(docs):
 # --- Hackathon API Endpoint ---
 @app.post("/hackrx/run", response_model=HackRxResponse, tags=["HackRx Submission"])
 async def run_submission(request: HackRxRequest):
-    document_url = request.documents
+    document_data = request.documents
     questions = request.questions
+    is_base64 = request.is_base64
+    
+    local_filename = os.path.join(DOWNLOAD_PATH, str(uuid.uuid4()) + ".pdf")
     
     try:
-        response = requests.get(document_url)
-        response.raise_for_status()
-        local_filename = os.path.join(DOWNLOAD_PATH, str(uuid.uuid4()) + ".pdf")
-        with open(local_filename, 'wb') as f: f.write(response.content)
+        if is_base64:
+            # Handle base64-encoded file upload
+            file_content = base64.b64decode(document_data)
+            with open(local_filename, 'wb') as f:
+                f.write(file_content)
+        else:
+            # Handle URL download
+            response = requests.get(document_data)
+            response.raise_for_status()
+            with open(local_filename, 'wb') as f:
+                f.write(response.content)
+    except base64.binascii.Error as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64 encoding: {e}")
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=400, detail=f"Failed to download document: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to process document: {e}")
 
     document_id = os.path.splitext(os.path.basename(local_filename))[0]
     

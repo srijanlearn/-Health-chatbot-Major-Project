@@ -30,3 +30,10 @@ python-dotenv
 
 # Frontend (For local testing)
 streamlit
+
+# Flask Backend & Twilio Integration
+flask
+twilio
+
+# OCR for Medical Images
+easyocr
