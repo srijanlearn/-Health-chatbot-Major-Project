@@ -126,11 +126,11 @@ Build the **#1 locally-running healthcare AI platform** for the Indian market. A
 
 | # | Phase | Priority | Est. Time | Status |
 |---|-------|----------|-----------|--------|
-| 1 | **Local LLM Engine** — `llm_engine.py`, Gemini removal, requirements | 🔴 Critical | 2-3 days | ⬜ Not started |
-| 2 | **Prompt Engineering + Orchestration** — prompts/, orchestrator | 🔴 Critical | 2-3 days | ⬜ Not started |
-| 3 | **Knowledge Graph + Hybrid Search** — knowledge/, ingestion upgrade | 🟡 High | 2-3 days | ⬜ Not started |
+| 1 | **Local LLM Engine** — `llm_engine.py`, Gemini removal, requirements | 🔴 Critical | 2-3 days | ✅ Completed |
+| 2 | **Prompt Engineering + Orchestration** — prompts/, orchestrator | 🔴 Critical | 2-3 days | ✅ Completed |
+| 3 | **Knowledge Graph + Hybrid Search** — knowledge/, ingestion upgrade | 🟡 High | 2-3 days | 🟡 In Progress |
 | 4 | **One-Click Installer** — installer/, Dockerfile | 🟡 High | 2 days | ⬜ Not started |
-| 5 | **Frontend** — local-first UI, admin panel | 🟡 High | 1-2 days | ⬜ Not started |
+| 5 | **Frontend** — local-first UI, admin panel | 🟡 High | 1-2 days | 🟡 In Progress |
 | 6 | **Fine-Tuning Pipeline** — training/ (Unsloth+QLoRA) | 🟠 Medium | 3-5 days | ⬜ Not started |
 | 7 | **WhatsApp Local Bridge** — whatsapp/ | 🟢 Future | 2-3 days | ⬜ Not started |
 

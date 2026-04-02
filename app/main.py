@@ -1,12 +1,13 @@
 # app/main.py
 """
-FastAPI RAG endpoint for HealthyPartner v2.
+FastAPI API for HealthyPartner v2.
 
-Changes from v1:
-- Removed Google Gemini dependency entirely
-- All inference runs locally via LLMEngine (Ollama)
-- Added system info and model management endpoints
-- Kept dual-path architecture (full text for specific facts, RAG for general)
+Changes from previous version:
+- Orchestrator is now the single entry point for all inference
+  (replaces the manual route_by_keywords + direct LLM calls that bypassed it)
+- KnowledgeGraph initialised at startup and passed to Orchestrator
+- Added /chat endpoint for conversational use without a document
+- Document Q&A endpoint now uses orchestrator.process() for the full 7-step pipeline
 """
 
 import os
@@ -22,19 +23,15 @@ from pydantic import BaseModel, Field
 from .llm_engine import LLMEngine, detect_system
 from .orchestrator import Orchestrator
 from .ingestion import process_and_get_retriever
-from .prompts.insurance_qa import (
-    INSURANCE_SYSTEM_PROMPT,
-    INSURANCE_SPECIFIC_FACT_PROMPT,
-    INSURANCE_GENERAL_PROMPT,
-)
-from .prompts.router import ROUTER_SYSTEM_PROMPT, route_by_keywords
+from .knowledge.graph import KnowledgeGraph
 
-# ── Configuration ──────────────────────────────────────────────────────────────
+# ── Configuration ───────────────────────────────────────────────────────────────
 
 DOWNLOAD_PATH = "./downloaded_files"
 DB_BASE_PATH = "./db"
+KG_DB_PATH = "./data/knowledge.db"
 
-# ── Request / Response models ──────────────────────────────────────────────────
+# ── Request / Response models ───────────────────────────────────────────────────
 
 
 class RunRequest(BaseModel):
@@ -47,24 +44,48 @@ class RunResponse(BaseModel):
     answers: List[str]
 
 
-# ── App lifespan ───────────────────────────────────────────────────────────────
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: Optional[List[dict]] = None  # [{"role": "user"|"assistant", "content": "..."}]
+
+
+class ChatResponse(BaseModel):
+    response: str
+    intent: str
+    route: str
+    language: str
+    is_emergency: bool
+    latency_ms: float
+
+
+# ── App lifespan ────────────────────────────────────────────────────────────────
 
 engine: Optional[LLMEngine] = None
+orchestrator: Optional[Orchestrator] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine
+    global engine, orchestrator
     print("🏥 HealthyPartner v2 starting up...")
     os.makedirs(DOWNLOAD_PATH, exist_ok=True)
     os.makedirs(DB_BASE_PATH, exist_ok=True)
+    os.makedirs(os.path.dirname(KG_DB_PATH), exist_ok=True)
 
-    # Initialise local LLM engine (no API keys needed)
+    # Local LLM engine (no API keys needed)
     engine = LLMEngine()
     status = engine.ensure_models_available()
     print(f"   Engine: {engine}")
     print(f"   Models: main={'✅' if status['main_model'] else '❌'} "
           f"fast={'✅' if status['fast_model'] else '❌'}")
+
+    # Knowledge graph (Indian healthcare data — instant lookups, no LLM needed)
+    kg = KnowledgeGraph(db_path=KG_DB_PATH)
+    print("   Knowledge graph: ✅")
+
+    # Orchestrator wires engine + KG into the 7-step pipeline
+    orchestrator = Orchestrator(engine=engine, knowledge_graph=kg)
+    print("   Orchestrator: ✅")
     print("   Ready.\n")
     yield
     print("Server shutting down.")
@@ -78,12 +99,12 @@ app = FastAPI(
 )
 
 
-# ── Health & system endpoints ──────────────────────────────────────────────────
+# ── Health & system endpoints ───────────────────────────────────────────────────
 
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    """Health check — returns system and model status."""
+    """Health check — returns Ollama connectivity, model availability, system info."""
     if engine is None:
         return {"status": "starting", "message": "Engine not yet initialised"}
     return {
@@ -108,7 +129,7 @@ async def system_info():
 
 @app.get("/models", tags=["System"])
 async def list_models():
-    """List locally available models."""
+    """List locally available Ollama models."""
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine not ready")
     return {
@@ -122,92 +143,115 @@ async def list_models():
     }
 
 
-# ── Main RAG endpoint ─────────────────────────────────────────────────────────
+# ── Chat endpoint (no document required) ───────────────────────────────────────
+
+
+@app.post("/chat", response_model=ChatResponse, tags=["Chat"])
+async def chat(request: ChatRequest):
+    """
+    Free-form healthcare chat.
+
+    Runs the full 7-step orchestration pipeline:
+    language detection → emergency check → intent classify →
+    knowledge graph lookup → routing → retrieval → generation → safety guardrails.
+    """
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Orchestrator not ready")
+
+    # Format conversation history as a string for the LLM context window
+    history_str = ""
+    is_new_user = not bool(request.conversation_history)
+    if request.conversation_history:
+        lines = []
+        for turn in request.conversation_history[-6:]:  # last 3 turns (6 messages)
+            role = turn.get("role", "")
+            content = turn.get("content", "")
+            if role and content:
+                lines.append(f"{role.capitalize()}: {content}")
+        history_str = "\n".join(lines)
+
+    result = orchestrator.process(
+        message=request.message,
+        conversation_history=history_str,
+        has_document=False,
+        is_new_user=is_new_user,
+    )
+
+    return ChatResponse(
+        response=result.response,
+        intent=result.intent,
+        route=result.route,
+        language=result.language,
+        is_emergency=result.is_emergency,
+        latency_ms=result.latency_ms,
+    )
+
+
+# ── Document Q&A endpoints ──────────────────────────────────────────────────────
 
 
 @app.post("/hackrx/run", response_model=RunResponse, tags=["Q&A"])
 async def run_submission(request: RunRequest):
-    """
-    Answer questions about a PDF document.
-
-    Kept at /hackrx/run for backward compatibility.
-    Also available at /healthypartner/run.
-    """
+    """Backward-compatible endpoint (original hackathon route)."""
     return await _process_document_qa(request)
 
 
 @app.post("/healthypartner/run", response_model=RunResponse, tags=["Q&A"])
 async def healthypartner_run(request: RunRequest):
-    """Answer questions about a PDF document."""
+    """Answer questions about a PDF document using the full orchestration pipeline."""
     return await _process_document_qa(request)
 
 
 async def _process_document_qa(request: RunRequest) -> RunResponse:
-    """Core document Q&A logic shared by both endpoints."""
-    if engine is None:
-        raise HTTPException(status_code=503, detail="Engine not initialised")
+    """
+    Core document Q&A logic shared by both endpoints.
 
-    document_data = request.documents
-    questions = request.questions
-    is_base64 = request.is_base64
+    For each question, runs the full orchestrator pipeline with:
+    - retrieved_chunks from HybridRetriever (BM25 + vector + cross-encoder rerank)
+    - full_document_text for specific fact queries
+    """
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Orchestrator not ready")
 
     # Download or decode document
     local_filename = os.path.join(DOWNLOAD_PATH, str(uuid.uuid4()) + ".pdf")
     try:
-        if is_base64:
-            file_content = base64.b64decode(document_data)
+        if request.is_base64:
+            file_content = base64.b64decode(request.documents)
             with open(local_filename, "wb") as f:
                 f.write(file_content)
         else:
-            response = http_requests.get(document_data, timeout=30)
+            response = http_requests.get(request.documents, timeout=30)
             response.raise_for_status()
             with open(local_filename, "wb") as f:
                 f.write(response.content)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to process document: {e}")
 
-    # Ingest document
+    # Ingest document → HybridRetriever + full text
     document_id = os.path.splitext(os.path.basename(local_filename))[0]
     retriever, full_text = process_and_get_retriever(local_filename, document_id)
     if not retriever:
         raise HTTPException(status_code=500, detail="Failed to process document.")
 
-    # Answer each question
+    # Answer each question via orchestrator (full 7-step pipeline)
     answers = []
-    for question in questions:
+    for question in request.questions:
         print(f"--- Answering: {question} ---")
         try:
-            # Route question
-            route = route_by_keywords(question)
-            if route is None:
-                route_raw = engine.classify(question, system_prompt=ROUTER_SYSTEM_PROMPT)
-                route = "specific_fact" if "specific" in route_raw.lower() else "general_rag"
-            print(f"    Route: {route}")
+            retrieved_docs = retriever.invoke(question)
+            retrieved_chunks = [doc.page_content for doc in retrieved_docs]
 
-            if route == "specific_fact":
-                # Path A: Full document context for precise extraction
-                doc_context = full_text[:12_000]
-                prompt = INSURANCE_SPECIFIC_FACT_PROMPT.format(
-                    context=doc_context, question=question
-                )
-                answer = engine.generate(
-                    prompt=prompt,
-                    system_prompt=INSURANCE_SYSTEM_PROMPT,
-                    think=True,
-                )
-            else:
-                # Path B: RAG with retrieved chunks
-                docs = retriever.invoke(question)
-                chunk_context = "\n\n".join(doc.page_content for doc in docs[:5])
-                prompt = INSURANCE_GENERAL_PROMPT.format(
-                    context=chunk_context, question=question
-                )
-                answer = engine.generate(
-                    prompt=prompt,
-                    system_prompt=INSURANCE_SYSTEM_PROMPT,
-                )
-
-            answers.append(answer)
+            result = orchestrator.process(
+                message=question,
+                retrieved_chunks=retrieved_chunks,
+                full_document_text=full_text,
+                has_document=True,
+            )
+            print(
+                f"    Route: {result.route} | Intent: {result.intent} | {result.latency_ms:.0f}ms"
+            )
+            answers.append(result.response)
         except Exception as e:
             answers.append(f"Error processing question: {e}")
             print(f"    Error: {e}")

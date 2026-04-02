@@ -28,10 +28,9 @@ from enum import Enum
 # =============================================================================
 
 class ModelType(Enum):
-    GEMINI_PRO = "gemini-1.5-pro"
-    GEMINI_FLASH = "gemini-1.5-flash"
-    GPT4 = "openai-gpt-4o"
-    LOCAL_LLAMA = "local-llama"
+    QWEN3_4B = "qwen3:4b"
+    QWEN3_0_6B = "qwen2.5:0.5b"
+    OLLAMA_FALLBACK = "local-llama"
 
 @dataclass
 class Document:
@@ -76,42 +75,115 @@ st.set_page_config(
 # Custom CSS for better styling
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Outfit', sans-serif;
+    }
     .main-header {
-        background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin-bottom: 2rem;
+        background: linear-gradient(135deg, #0f766e 0%, #064e3b 100%);
+        color: white;
+        padding: 2.5rem;
+        border-radius: 16px;
+        margin-bottom: 2.5rem;
+        box-shadow: 0 10px 25px rgba(6, 78, 59, 0.4);
+        position: relative;
+        overflow: hidden;
+    }
+    .main-header::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
+        transform: rotate(30deg);
+        pointer-events: none;
+    }
+    .main-header h1 {
+        color: white !important;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }
+    .main-header p {
+        color: #d1fae5 !important;
+        font-size: 1.1rem;
+        opacity: 0.9;
     }
     .doc-card {
-        padding: 1rem;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        margin-bottom: 0.5rem;
-        background: #f9fafb;
+        padding: 1.5rem;
+        border: 1px solid rgba(229, 231, 235, 0.5);
+        border-radius: 12px;
+        margin-bottom: 1rem;
+        background: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(10px);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 2px 10px rgba(0,0,0,0.02);
     }
     .doc-card:hover {
-        border-color: #22c55e;
-        background: #f0fdf4;
+        transform: translateY(-4px) scale(1.01);
+        border-color: #10b981;
+        box-shadow: 0 12px 20px rgba(16, 185, 129, 0.1);
+        background: white;
     }
     .answer-box {
-        background: #f9fafb;
-        padding: 1.5rem;
-        border-radius: 8px;
-        border-left: 4px solid #22c55e;
-        margin: 1rem 0;
+        background: linear-gradient(to right, #ffffff, #f8fafc);
+        padding: 1.75rem;
+        border-radius: 12px;
+        border-left: 5px solid #10b981;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+        animation: fadeIn 0.5s ease-in-out;
+        color: #1e293b;
+        line-height: 1.6;
+        font-size: 1.05rem;
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
     }
     .source-box {
-        background: #fffbeb;
-        padding: 1rem;
-        border-radius: 6px;
-        margin-top: 0.5rem;
-        font-size: 0.9rem;
+        background: #f0fdf4;
+        padding: 1.25rem;
+        border-radius: 8px;
+        margin-top: 0.75rem;
+        font-size: 0.95rem;
+        border: 1px solid #dcfce7;
+        color: #166534;
+        transition: transform 0.2s;
+    }
+    .source-box:hover {
+        transform: translateX(4px);
     }
     .metric-card {
         background: white;
-        padding: 1rem;
-        border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        border-top: 4px solid #10b981;
+        transition: transform 0.2s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.1);
+    }
+    
+    /* Streamlit button overrides */
+    .stButton>button {
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        transition: all 0.2s !important;
+    }
+    .stButton>button[kind="primary"] {
+        background: linear-gradient(to right, #059669, #10b981) !important;
+        border: none !important;
+        color: white !important;
+        box-shadow: 0 4px 6px rgba(16, 185, 129, 0.2) !important;
+    }
+    .stButton>button[kind="primary"]:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 12px rgba(16, 185, 129, 0.3) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -130,7 +202,7 @@ def init_session_state():
         'processing_log': [],
         'cache': {},  # cache_key -> answers
         'api_endpoint': 'http://localhost:5000/healthypartner/run',
-        'selected_model': ModelType.GEMINI_PRO.value,
+        'selected_model': ModelType.QWEN3_4B.value,
         'streaming': True,
         'temperature': 0.5,
         'max_tokens': 1000,
@@ -313,7 +385,17 @@ def render_sidebar():
         
         # Model Settings
         with st.expander("🤖 Model Settings", expanded=True):
-            models = [m.value for m in ModelType]
+            # Fetch dynamically if possible
+            try:
+                model_url = st.session_state.api_endpoint.replace("/run", "/models").replace("healthypartner/models", "models")
+                resp = requests.get(model_url, timeout=1)
+                if resp.status_code == 200:
+                    models = resp.json().get("available", [m.value for m in ModelType])
+                else:
+                    models = [m.value for m in ModelType]
+            except:
+                models = [m.value for m in ModelType]
+                
             current_idx = models.index(st.session_state.selected_model) if st.session_state.selected_model in models else 0
             
             st.selectbox(
