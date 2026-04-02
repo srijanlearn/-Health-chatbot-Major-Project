@@ -1,0 +1,94 @@
+{
+  "category": {
+    "id": "pmjay",
+    "name": "Ayushman Bharat - PMJAY",
+    "name_hi": "आयुष्मान भारत - PMJAY",
+    "description": "World's largest government health insurance scheme"
+  },
+  "facts": [
+    {
+      "key": "PMJAY Coverage Amount",
+      "key_hi": "PMJAY कवरेज राशि",
+      "value": "Rs 5 lakh per family per year on floater basis. No cap on family size. No age restriction. Covers secondary and tertiary hospitalization.",
+      "value_hi": "प्रति परिवार प्रति वर्ष 5 लाख रुपये।",
+      "source": "National Health Authority (NHA)",
+      "tags": [
+        "pmjay",
+        "coverage",
+        "sum_insured",
+        "family"
+      ]
+    },
+    {
+      "key": "PMJAY Eligibility",
+      "key_hi": "PMJAY पात्रता",
+      "value": "Rural: kaccha house, landless, SC/ST, bonded labour. Urban: rag pickers, street vendors, domestic workers, construction workers, plumbers, security guards. Check at mera.pmjay.gov.in or call 14555.",
+      "value_hi": "mera.pmjay.gov.in पर या 14555 पर पात्रता जांचें।",
+      "source": "National Health Authority (NHA)",
+      "tags": [
+        "pmjay",
+        "eligibility"
+      ]
+    },
+    {
+      "key": "PMJAY Helpline",
+      "key_hi": "PMJAY हेल्पलाइन",
+      "value": "Toll-free: 14555 or 1800-111-565 (24x7). Website: pmjay.gov.in.",
+      "value_hi": "टोल-फ्री: 14555 या 1800-111-565 (24x7)।",
+      "source": "National Health Authority (NHA)",
+      "tags": [
+        "pmjay",
+        "helpline",
+        "contact"
+      ]
+    },
+    {
+      "key": "PMJAY No Waiting Period",
+      "key_hi": "PMJAY में कोई प्रतीक्षा अवधि नहीं",
+      "value": "Unlike private insurance, PMJAY has NO waiting period including for pre-existing conditions. All covered treatments available from day one.",
+      "value_hi": "किसी भी बीमारी के लिए कोई प्रतीक्षा अवधि नहीं।",
+      "source": "National Health Authority (NHA)",
+      "tags": [
+        "pmjay",
+        "waiting_period",
+        "no_exclusion"
+      ]
+    },
+    {
+      "key": "PMJAY Card Registration",
+      "key_hi": "PMJAY कार्ड कैसे बनवाएं",
+      "value": "1) Check eligibility at mera.pmjay.gov.in. 2) Visit Arogya Mitra at empaneled hospital or CSC. 3) Carry Aadhaar/ration card. 4) Biometric verification. 5) e-Card generated instantly. No premium payment required.",
+      "value_hi": "mera.pmjay.gov.in पर पात्रता जांचें। आरोग्य मित्र से मिलें। आधार लेकर जाएं। कार्ड तुरंत बनता है।",
+      "source": "National Health Authority (NHA)",
+      "tags": [
+        "pmjay",
+        "card",
+        "registration"
+      ]
+    },
+    {
+      "key": "PMJAY Covered Procedures",
+      "key_hi": "PMJAY कवर्ड प्रक्रियाएं",
+      "value": "1949 surgical packages across 27 specialties: cardiology (bypass, valve replacement), orthopedics (knee/hip replacement), oncology (chemotherapy), dialysis, kidney transplant, neurosurgery. Pre-hospitalization 3 days, post-hospitalization 15 days covered.",
+      "value_hi": "27 विशेषताओं में 1949 पैकेज।",
+      "source": "National Health Authority (NHA)",
+      "tags": [
+        "pmjay",
+        "procedures",
+        "surgery"
+      ]
+    },
+    {
+      "key": "PMJAY Hospital Network",
+      "key_hi": "PMJAY अस्पताल नेटवर्क",
+      "value": "30,000+ empaneled hospitals across India. Find nearest: pmjay.gov.in/hospital or call 14555. Covers 55 crore beneficiaries across 12 crore families.",
+      "value_hi": "30,000+ पैनल अस्पताल। 55 करोड़ लाभार्थी।",
+      "source": "National Health Authority (NHA)",
+      "tags": [
+        "pmjay",
+        "hospitals",
+        "network"
+      ]
+    }
+  ]
+}

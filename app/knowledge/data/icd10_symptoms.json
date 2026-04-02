@@ -1,0 +1,139 @@
+{
+  "mappings": [
+    {
+      "symptom": "chest pain",
+      "symptom_hi": "सीने में दर्द",
+      "icd10_code": "R07.9",
+      "condition_name": "Chest pain, unspecified",
+      "condition_name_hi": "छाती दर्द",
+      "severity": "potentially_severe",
+      "see_doctor_urgency": "immediate"
+    },
+    {
+      "symptom": "fever",
+      "symptom_hi": "बुखार",
+      "icd10_code": "R50.9",
+      "condition_name": "Fever, unspecified",
+      "condition_name_hi": "बुखार",
+      "severity": "mild_to_moderate",
+      "see_doctor_urgency": "within_24h"
+    },
+    {
+      "symptom": "persistent cough",
+      "symptom_hi": "लगातार खांसी",
+      "icd10_code": "R05",
+      "condition_name": "Cough",
+      "condition_name_hi": "खांसी",
+      "severity": "mild_to_moderate",
+      "see_doctor_urgency": "within_week"
+    },
+    {
+      "symptom": "shortness of breath",
+      "symptom_hi": "सांस फूलना",
+      "icd10_code": "R06.0",
+      "condition_name": "Dyspnoea (Shortness of breath)",
+      "condition_name_hi": "सांस की तकलीफ",
+      "severity": "severe",
+      "see_doctor_urgency": "immediate"
+    },
+    {
+      "symptom": "headache",
+      "symptom_hi": "सिरदर्द",
+      "icd10_code": "R51",
+      "condition_name": "Headache",
+      "condition_name_hi": "सिरदर्द",
+      "severity": "usually_mild",
+      "see_doctor_urgency": "within_week"
+    },
+    {
+      "symptom": "high blood sugar",
+      "symptom_hi": "हाई ब्लड शुगर",
+      "icd10_code": "R73.09",
+      "condition_name": "Hyperglycemia",
+      "condition_name_hi": "उच्च रक्त शर्करा",
+      "severity": "moderate_to_severe",
+      "see_doctor_urgency": "within_24h"
+    },
+    {
+      "symptom": "high blood pressure",
+      "symptom_hi": "हाई ब्लड प्रेशर",
+      "icd10_code": "I10",
+      "condition_name": "Essential hypertension",
+      "condition_name_hi": "उच्च रक्तचाप",
+      "severity": "moderate_to_severe",
+      "see_doctor_urgency": "within_24h"
+    },
+    {
+      "symptom": "joint pain",
+      "symptom_hi": "जोड़ों का दर्द",
+      "icd10_code": "M25.5",
+      "condition_name": "Arthralgia (Joint pain)",
+      "condition_name_hi": "जोड़ों का दर्द",
+      "severity": "mild_to_moderate",
+      "see_doctor_urgency": "within_week"
+    },
+    {
+      "symptom": "back pain",
+      "symptom_hi": "पीठ दर्द",
+      "icd10_code": "M54.5",
+      "condition_name": "Low back pain",
+      "condition_name_hi": "पीठ के निचले हिस्से में दर्द",
+      "severity": "usually_mild",
+      "see_doctor_urgency": "within_week"
+    },
+    {
+      "symptom": "stomach pain",
+      "symptom_hi": "पेट दर्द",
+      "icd10_code": "R10.9",
+      "condition_name": "Unspecified abdominal pain",
+      "condition_name_hi": "पेट दर्द",
+      "severity": "mild_to_moderate",
+      "see_doctor_urgency": "within_24h"
+    },
+    {
+      "symptom": "dizziness",
+      "symptom_hi": "चक्कर आना",
+      "icd10_code": "R42",
+      "condition_name": "Dizziness and giddiness",
+      "condition_name_hi": "चक्कर आना",
+      "severity": "mild_to_moderate",
+      "see_doctor_urgency": "within_24h"
+    },
+    {
+      "symptom": "fatigue",
+      "symptom_hi": "थकान",
+      "icd10_code": "R53.83",
+      "condition_name": "Fatigue",
+      "condition_name_hi": "थकान",
+      "severity": "mild",
+      "see_doctor_urgency": "routine"
+    },
+    {
+      "symptom": "nausea vomiting",
+      "symptom_hi": "जी मिचलाना उल्टी",
+      "icd10_code": "R11",
+      "condition_name": "Nausea and vomiting",
+      "condition_name_hi": "मतली और उल्टी",
+      "severity": "mild_to_moderate",
+      "see_doctor_urgency": "within_24h"
+    },
+    {
+      "symptom": "skin rash",
+      "symptom_hi": "त्वचा पर दाने",
+      "icd10_code": "R21",
+      "condition_name": "Rash and other nonspecific skin eruption",
+      "condition_name_hi": "त्वचा पर दाने",
+      "severity": "usually_mild",
+      "see_doctor_urgency": "within_week"
+    },
+    {
+      "symptom": "swollen feet",
+      "symptom_hi": "पैर में सूजन",
+      "icd10_code": "R60.0",
+      "condition_name": "Localized edema",
+      "condition_name_hi": "स्थानीय सूजन",
+      "severity": "moderate",
+      "see_doctor_urgency": "within_24h"
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "medicines": [
+    {
+      "brand_name": "Crocin",
+      "generic_name": "Paracetamol 500mg",
+      "generic_name_hi": "पैरासिटामोल 500mg",
+      "category": "analgesic",
+      "jan_aushadhi_price": 6.72,
+      "market_price": 30.68,
+      "savings_percent": 78,
+      "usage": "Fever, headache, body pain"
+    },
+    {
+      "brand_name": "Dolo 650",
+      "generic_name": "Paracetamol 650mg",
+      "generic_name_hi": "पैरासिटामोल 650mg",
+      "category": "analgesic",
+      "jan_aushadhi_price": 8.4,
+      "market_price": 33.53,
+      "savings_percent": 75,
+      "usage": "Fever, pain relief"
+    },
+    {
+      "brand_name": "Combiflam",
+      "generic_name": "Ibuprofen 400mg + Paracetamol 325mg",
+      "generic_name_hi": "इबुप्रोफेन + पैरासिटामोल",
+      "category": "analgesic",
+      "jan_aushadhi_price": 12.5,
+      "market_price": 42.0,
+      "savings_percent": 70,
+      "usage": "Pain, inflammation, fever"
+    },
+    {
+      "brand_name": "Azithral 500",
+      "generic_name": "Azithromycin 500mg",
+      "generic_name_hi": "एज़िथ्रोमाइसिन 500mg",
+      "category": "antibiotic",
+      "jan_aushadhi_price": 33.0,
+      "market_price": 119.0,
+      "savings_percent": 72,
+      "usage": "Bacterial infections, respiratory infections"
+    },
+    {
+      "brand_name": "Augmentin 625",
+      "generic_name": "Amoxicillin 500mg + Clavulanic Acid 125mg",
+      "generic_name_hi": "एमोक्सिसिलिन + क्लैवुलैनिक एसिड",
+      "category": "antibiotic",
+      "jan_aushadhi_price": 45.0,
+      "market_price": 198.0,
+      "savings_percent": 77,
+      "usage": "Bacterial infections, UTI"
+    },
+    {
+      "brand_name": "Glycomet",
+      "generic_name": "Metformin 500mg",
+      "generic_name_hi": "मेटफॉर्मिन 500mg",
+      "category": "antidiabetic",
+      "jan_aushadhi_price": 8.5,
+      "market_price": 31.0,
+      "savings_percent": 73,
+      "usage": "Type 2 diabetes, blood sugar control"
+    },
+    {
+      "brand_name": "Amlong",
+      "generic_name": "Amlodipine 5mg",
+      "generic_name_hi": "एम्लोडिपिन 5mg",
+      "category": "antihypertensive",
+      "jan_aushadhi_price": 5.0,
+      "market_price": 36.0,
+      "savings_percent": 86,
+      "usage": "High blood pressure, angina"
+    },
+    {
+      "brand_name": "Atorva",
+      "generic_name": "Atorvastatin 10mg",
+      "generic_name_hi": "एटोर्वास्टैटिन 10mg",
+      "category": "statin",
+      "jan_aushadhi_price": 12.0,
+      "market_price": 89.0,
+      "savings_percent": 87,
+      "usage": "High cholesterol, cardiovascular risk"
+    },
+    {
+      "brand_name": "Omez",
+      "generic_name": "Omeprazole 20mg",
+      "generic_name_hi": "ओमेप्राज़ोल 20mg",
+      "category": "antacid",
+      "jan_aushadhi_price": 9.5,
+      "market_price": 72.0,
+      "savings_percent": 87,
+      "usage": "Acidity, GERD, peptic ulcer"
+    },
+    {
+      "brand_name": "Cetzine",
+      "generic_name": "Cetirizine 10mg",
+      "generic_name_hi": "सेटिरिज़िन 10mg",
+      "category": "antihistamine",
+      "jan_aushadhi_price": 4.5,
+      "market_price": 32.0,
+      "savings_percent": 86,
+      "usage": "Allergies, hay fever, itching"
+    },
+    {
+      "brand_name": "Montair",
+      "generic_name": "Montelukast 10mg",
+      "generic_name_hi": "मोंटेलुकास्ट 10mg",
+      "category": "antiasthmatic",
+      "jan_aushadhi_price": 18.0,
+      "market_price": 135.0,
+      "savings_percent": 87,
+      "usage": "Asthma, allergic rhinitis"
+    },
+    {
+      "brand_name": "Telma",
+      "generic_name": "Telmisartan 40mg",
+      "generic_name_hi": "टेल्मिसार्टन 40mg",
+      "category": "antihypertensive",
+      "jan_aushadhi_price": 10.0,
+      "market_price": 78.0,
+      "savings_percent": 87,
+      "usage": "High blood pressure"
+    },
+    {
+      "brand_name": "Thyronorm",
+      "generic_name": "Levothyroxine 50mcg",
+      "generic_name_hi": "लेवोथायरॉक्सिन 50mcg",
+      "category": "thyroid",
+      "jan_aushadhi_price": 12.0,
+      "market_price": 112.0,
+      "savings_percent": 89,
+      "usage": "Hypothyroidism"
+    },
+    {
+      "brand_name": "Ecosprin",
+      "generic_name": "Aspirin 75mg",
+      "generic_name_hi": "एस्पिरिन 75mg",
+      "category": "antiplatelet",
+      "jan_aushadhi_price": 3.2,
+      "market_price": 18.4,
+      "savings_percent": 83,
+      "usage": "Blood thinning, heart attack prevention"
+    },
+    {
+      "brand_name": "Ciplox",
+      "generic_name": "Ciprofloxacin 500mg",
+      "generic_name_hi": "सिप्रोफ्लोक्सासिन 500mg",
+      "category": "antibiotic",
+      "jan_aushadhi_price": 15.0,
+      "market_price": 68.0,
+      "savings_percent": 78,
+      "usage": "UTI, bacterial infections"
+    },
+    {
+      "brand_name": "Voveran",
+      "generic_name": "Diclofenac 50mg",
+      "generic_name_hi": "डाइक्लोफेनाक 50mg",
+      "category": "nsaid",
+      "jan_aushadhi_price": 5.0,
+      "market_price": 32.0,
+      "savings_percent": 84,
+      "usage": "Pain, inflammation, arthritis"
+    },
+    {
+      "brand_name": "Pan-D",
+      "generic_name": "Pantoprazole 40mg",
+      "generic_name_hi": "पैंटोप्राज़ोल 40mg",
+      "category": "antacid",
+      "jan_aushadhi_price": 11.0,
+      "market_price": 85.0,
+      "savings_percent": 87,
+      "usage": "Acidity, gastric ulcer"
+    },
+    {
+      "brand_name": "Amaryl",
+      "generic_name": "Glimepiride 1mg",
+      "generic_name_hi": "ग्लिमेपिराइड 1mg",
+      "category": "antidiabetic",
+      "jan_aushadhi_price": 7.0,
+      "market_price": 52.0,
+      "savings_percent": 87,
+      "usage": "Type 2 diabetes"
+    },
+    {
+      "brand_name": "Losacar",
+      "generic_name": "Losartan 50mg",
+      "generic_name_hi": "लोसार्टन 50mg",
+      "category": "antihypertensive",
+      "jan_aushadhi_price": 8.0,
+      "market_price": 55.0,
+      "savings_percent": 85,
+      "usage": "High blood pressure, kidney protection"
+    },
+    {
+      "brand_name": "Rantac",
+      "generic_name": "Ranitidine 150mg",
+      "generic_name_hi": "रैनिटिडिन 150mg",
+      "category": "antacid",
+      "jan_aushadhi_price": 5.5,
+      "market_price": 28.0,
+      "savings_percent": 80,
+      "usage": "Acidity, gastric ulcer"
+    }
+  ]
+}

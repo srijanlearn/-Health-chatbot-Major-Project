@@ -1,0 +1,130 @@
+{
+  "category": {
+    "id": "irdai",
+    "name": "IRDAI Health Insurance Regulations",
+    "name_hi": "IRDAI स्वास्थ्य बीमा नियम",
+    "description": "Key regulations for health insurance policies in India"
+  },
+  "facts": [
+    {
+      "key": "Pre-existing Disease Waiting Period",
+      "key_hi": "पहले से मौजूद बीमारी की प्रतीक्षा अवधि",
+      "value": "Maximum 48 months (4 years). No policy can impose more than 48 months waiting period for pre-existing diseases. After this period insurer must cover PED claims.",
+      "value_hi": "अधिकतम 48 महीने।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "waiting_period",
+        "ped",
+        "pre-existing"
+      ]
+    },
+    {
+      "key": "Initial Waiting Period",
+      "key_hi": "प्रारंभिक प्रतीक्षा अवधि",
+      "value": "Maximum 30 days from policy start. Only accident hospitalization is covered during this period.",
+      "value_hi": "पॉलिसी शुरू होने से अधिकतम 30 दिन।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "waiting_period",
+        "initial"
+      ]
+    },
+    {
+      "key": "Specific Disease Waiting Period",
+      "key_hi": "विशिष्ट रोग प्रतीक्षा अवधि",
+      "value": "Maximum 24 months for named diseases: cataracts, joint replacement, hernia, piles, sinusitis, tonsillectomy, kidney stones, gallstones.",
+      "value_hi": "नामित रोगों के लिए अधिकतम 24 महीने।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "waiting_period",
+        "cataracts",
+        "hernia",
+        "specific_disease"
+      ]
+    },
+    {
+      "key": "Free Look Period",
+      "key_hi": "फ्री लुक अवधि",
+      "value": "15 days for offline, 30 days for online policies. Full refund minus proportionate risk premium on cancellation.",
+      "value_hi": "ऑफलाइन 15 दिन, ऑनलाइन 30 दिन।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "free_look",
+        "cancellation",
+        "refund"
+      ]
+    },
+    {
+      "key": "Portability Rights",
+      "key_hi": "पोर्टेबिलिटी अधिकार",
+      "value": "Can port between insurers without losing waiting period credit. Apply 45 days before renewal.",
+      "value_hi": "बिना प्रतीक्षा अवधि क्रेडिट खोए बीमाकर्ता बदल सकते हैं।",
+      "source": "IRDAI Guidelines",
+      "tags": [
+        "portability",
+        "switching",
+        "renewal"
+      ]
+    },
+    {
+      "key": "Cashless Hospitalization",
+      "key_hi": "कैशलेस अस्पताल",
+      "value": "At network hospitals. Emergency pre-auth: insurer responds within 1 hour. Planned: 24 hours.",
+      "value_hi": "नेटवर्क अस्पतालों में। आपातकालीन: 1 घंटे में जवाब।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "cashless",
+        "network",
+        "hospital"
+      ]
+    },
+    {
+      "key": "Claim Settlement Time",
+      "key_hi": "दावा निपटान समय",
+      "value": "Must settle or reject within 30 days of documents. Delayed settlement attracts bank rate + 2% interest.",
+      "value_hi": "30 दिनों में निपटान अनिवार्य।",
+      "source": "IRDAI (TPA & Claims) Regulations",
+      "tags": [
+        "claim",
+        "settlement",
+        "timeline"
+      ]
+    },
+    {
+      "key": "Renewal Guarantee",
+      "key_hi": "नवीनीकरण गारंटी",
+      "value": "All individual policies guaranteed renewable for life except fraud. Cannot refuse based on claims history.",
+      "value_hi": "सभी पॉलिसी जीवन भर नवीनीकरण गारंटी।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "renewal",
+        "guarantee",
+        "lifetime"
+      ]
+    },
+    {
+      "key": "AYUSH Coverage",
+      "key_hi": "आयुष कवरेज",
+      "value": "All policies must cover Ayurveda, Yoga, Unani, Siddha, Homeopathy on same basis as allopathic treatment.",
+      "value_hi": "सभी पॉलिसी में आयुष उपचार कवर अनिवार्य।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "ayush",
+        "ayurveda",
+        "homeopathy"
+      ]
+    },
+    {
+      "key": "No Claim Bonus",
+      "key_hi": "नो क्लेम बोनस",
+      "value": "NCB for claim-free years: 5-50% increased sum insured or premium discount. Maintained on portability.",
+      "value_hi": "दावा-मुक्त वर्षों पर NCB: 5-50% बढ़ी बीमा राशि।",
+      "source": "IRDAI (Health Insurance) Regulations 2024",
+      "tags": [
+        "ncb",
+        "no_claim_bonus",
+        "discount"
+      ]
+    }
+  ]
+}

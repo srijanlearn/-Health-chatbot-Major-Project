@@ -1,0 +1,74 @@
+{
+  "interactions": [
+    {
+      "drug_a": "Warfarin",
+      "drug_b": "Aspirin",
+      "severity": "severe",
+      "description": "Combining warfarin and aspirin significantly increases bleeding risk. Both are anticoagulants/antiplatelets.",
+      "recommendation": "Avoid combination unless explicitly prescribed by cardiologist. Monitor INR closely."
+    },
+    {
+      "drug_a": "Metformin",
+      "drug_b": "Alcohol",
+      "severity": "severe",
+      "description": "Alcohol with metformin increases risk of lactic acidosis, a rare but serious condition.",
+      "recommendation": "Avoid alcohol while taking metformin. Inform doctor if you consume alcohol regularly."
+    },
+    {
+      "drug_a": "ACE Inhibitor",
+      "drug_b": "Potassium supplements",
+      "severity": "moderate",
+      "description": "ACE inhibitors (ramipril, enalapril) can raise potassium levels. Potassium supplements add further risk of hyperkalemia.",
+      "recommendation": "Monitor potassium levels regularly. Avoid potassium supplements unless prescribed."
+    },
+    {
+      "drug_a": "Ciprofloxacin",
+      "drug_b": "Antacids",
+      "severity": "moderate",
+      "description": "Antacids containing calcium, magnesium, or aluminum significantly reduce ciprofloxacin absorption.",
+      "recommendation": "Take ciprofloxacin 2 hours before or 6 hours after antacids."
+    },
+    {
+      "drug_a": "Statins",
+      "drug_b": "Grapefruit juice",
+      "severity": "moderate",
+      "description": "Grapefruit juice inhibits CYP3A4 enzyme, increasing statin blood levels and risk of muscle damage (myopathy).",
+      "recommendation": "Avoid grapefruit juice while taking atorvastatin, simvastatin, or lovastatin."
+    },
+    {
+      "drug_a": "NSAIDs",
+      "drug_b": "Antihypertensives",
+      "severity": "moderate",
+      "description": "NSAIDs (ibuprofen, diclofenac) can reduce effectiveness of blood pressure medications and worsen kidney function.",
+      "recommendation": "Use paracetamol instead of NSAIDs for pain if on antihypertensives. Monitor BP regularly."
+    },
+    {
+      "drug_a": "Methotrexate",
+      "drug_b": "NSAIDs",
+      "severity": "severe",
+      "description": "NSAIDs can increase methotrexate toxicity by reducing its renal excretion, leading to serious side effects.",
+      "recommendation": "Avoid NSAIDs while on methotrexate. Consult doctor immediately if both prescribed."
+    },
+    {
+      "drug_a": "SSRIs",
+      "drug_b": "Tramadol",
+      "severity": "severe",
+      "description": "Combining SSRIs with tramadol can cause serotonin syndrome — a potentially life-threatening condition.",
+      "recommendation": "Avoid combination. Inform all doctors about all medications being taken."
+    },
+    {
+      "drug_a": "Digoxin",
+      "drug_b": "Amiodarone",
+      "severity": "severe",
+      "description": "Amiodarone increases digoxin levels significantly, leading to digoxin toxicity (nausea, arrhythmia).",
+      "recommendation": "Reduce digoxin dose by 50% when starting amiodarone. Monitor digoxin levels closely."
+    },
+    {
+      "drug_a": "Sildenafil",
+      "drug_b": "Nitrates",
+      "severity": "severe",
+      "description": "Combining sildenafil (Viagra) with nitrates causes severe blood pressure drop, potentially fatal.",
+      "recommendation": "Absolutely contraindicated. Never combine. Inform cardiologist about all medications."
+    }
+  ]
+}
