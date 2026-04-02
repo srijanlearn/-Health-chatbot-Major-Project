@@ -1,217 +1,157 @@
 """
-HealthyPartner backend compatibility shim
+HealthyPartner v2 — Unified Backend Server
 
-- Replaces previous /hackrx/* endpoints with /healthypartner/*
-- Provides example handlers for:
-    GET  /health
-    POST /healthypartner/run       -> expects payload with 'questions' and 'documents' (base64 or document_url)
-    POST /healthypartner/generate  -> expects {"prompt": "...", "n": 5} and returns {"questions": [...]}
-- IMPORTANT: Replace the placeholder `process_questions_for_document` and `generate_questions_from_prompt`
-  with your real implementations (ingestion + LLM calls).
+Combines all endpoints into a single Flask server:
+- /health              → System health check
+- /healthypartner/run  → Document Q&A (main endpoint)
+- /healthypartner/generate → Question template generation
+- /webhook             → Twilio WhatsApp/SMS webhook
+- /test                → Local testing endpoint
+- /system/info         → Hardware & model info
 
-Run:
-    python healthypartner_backend.py
+No cloud API keys required. All inference runs locally via Ollama.
 """
 
-from flask import Flask, request, jsonify
-import base64
 import os
+import base64
 import traceback
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from flask import Flask, request, jsonify
 
+from app.llm_engine import LLMEngine, detect_system
 from app.ingestion import process_and_get_retriever
+from app.prompts.insurance_qa import (
+    INSURANCE_SYSTEM_PROMPT,
+    INSURANCE_SPECIFIC_FACT_PROMPT,
+    INSURANCE_GENERAL_PROMPT,
+)
+from app.prompts.router import ROUTER_SYSTEM_PROMPT, route_by_keywords
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# --- Configuration (tweak) ---
+# ── Configuration ──────────────────────────────────────────────────────────────
+
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_PATH", "./downloaded_files")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-load_dotenv()
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise RuntimeError("GOOGLE_API_KEY is not set in the environment")
+# ── Initialise local LLM engine (no API keys) ─────────────────────────────────
 
-# Lazy-initialised global LLMs
-llm_pro: ChatGoogleGenerativeAI | None = None
-llm_flash: ChatGoogleGenerativeAI | None = None
-
-
-def get_llms():
-    """Initialise and cache Gemini LLM clients (mirrors app/main.py)."""
-    global llm_pro, llm_flash
-    if llm_pro is None or llm_flash is None:
-        llm_pro = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro-latest", google_api_key=API_KEY, temperature=0
-        )
-        llm_flash = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash-latest", google_api_key=API_KEY, temperature=0
-        )
-    return llm_pro, llm_flash
+print("🏥 HealthyPartner v2 — Initialising local LLM engine...")
+engine = LLMEngine()
+status = engine.ensure_models_available()
+print(f"   Engine: {engine}")
+print(f"   Models: main={'✅' if status['main_model'] else '❌'} "
+      f"fast={'✅' if status['fast_model'] else '❌'}")
+print("   Ready.\n")
 
 
+# ── Helper functions ───────────────────────────────────────────────────────────
 
-def save_base64_pdf(b64: str, filename_prefix: str = "doc") -> str:
-    """Save base64-encoded PDF to disk and return filepath"""
-    if not b64:
-        raise ValueError("no base64 content provided")
+
+def save_base64_pdf(b64: str, prefix: str = "doc") -> str:
+    """Decode base64 PDF and save to disk."""
     data = base64.b64decode(b64)
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"{filename_prefix}_{timestamp}.pdf"
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"{prefix}_{ts}.pdf"
     path = os.path.join(DOWNLOAD_DIR, filename)
     with open(path, "wb") as f:
         f.write(data)
     return path
 
 
-
-def _format_docs(docs):
-    """Same as format_docs from app/main.py"""
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
-
 def process_questions_for_document(
     doc_path: str,
     questions: List[str],
-    page_ranges: str | None = None,
-    meta: Dict[str, Any] | None = None,
+    page_ranges: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Run the full ingestion + router + Gemini pipeline for a single PDF.
+    """Run the full ingestion + routing + local LLM pipeline for a PDF."""
 
-    Returns
-    -------
-    dict with keys {"answers": [...], "sources": [...], "meta": {...}}
-    """
-    # Ingest and build retriever/full text
     document_id = os.path.splitext(os.path.basename(doc_path))[0]
     retriever, full_text = process_and_get_retriever(doc_path, document_id)
     if not retriever:
         raise RuntimeError("Failed to process document for retrieval")
-
-    llm_pro, llm_flash = get_llms()
-
-    # Router chain (copied from app/main.py)
-    router_template = (
-        "You are an expert at routing a user's question. Based on the question, "
-        "determine if it is a 'Specific Fact' question or a 'General Context' question.\n"
-        "- 'Specific Fact' questions ask for a precise number, date, name, or a waiting "
-        "period for a named item (e.g., \"What is the waiting period for cataracts?\", "
-        "\"What is the limit for room rent?\").\n"
-        "- 'General Context' questions are broader and ask for summaries or conditions "
-        "(e.g., \"Does this policy cover maternity?\", \"Summarize the organ donor rules.\").\n"
-        "Return only the single word 'Specific Fact' or 'General Context'.\n"
-        "Question: {question}\n"
-        "Classification:"
-    )
-    router_prompt = ChatPromptTemplate.from_template(router_template)
-    router_chain = router_prompt | llm_flash | StrOutputParser()
-
-    # Final answer prompt (copied from app/main.py)
-    final_prompt_template = """You are a highly precise Q&A engine that answers questions based ONLY on the provided CONTEXT.
-
-CONTEXT:
-{context}
-
-QUESTION:
-{question}
-
-**INSTRUCTIONS FOR YOUR ANSWER:**
-1.  **Strictly Adhere to Context:** Your answer MUST be based exclusively on the information within the provided CONTEXT.
-2.  **CRITICAL REASONING RULE:** To answer the question, you may need to synthesize scattered information. For questions about a 'waiting period' for a specific procedure, you MUST find where the procedure is listed and what waiting period category it falls under.
-3.  **Conciseness vs. Completeness Rule:** Your answer MUST be a single, concise paragraph. 
-    - For **definitional questions** (e.g., "How is a 'Hospital' defined?"), you MUST be comprehensive and include all specific criteria listed in the context (like bed counts, staff, etc.).
-    - For **all other questions**, you MUST be ruthlessly concise and include ONLY the information that directly answers the question. Do not include extra details.
-4.  **Format:** If the question is objective, you MUST begin your answer with "Yes," or "No,".
-5.  **Data Extraction:** You MUST extract precise numerical values and percentages from the context.
-6.  **Missing Information:** If the information is not in the context, state only: "This information is not available in the provided document."
-
-**ANSWER:**"""
-    final_prompt = ChatPromptTemplate.from_template(final_prompt_template)
 
     answers: List[str] = []
     sources: List[Any] = []
 
     for q in questions:
         try:
-            route = router_chain.invoke({"question": q})
-            print(f"--- Answering question: {q} ---")
-            print(f"Router choice: {route}")
+            # Route question
+            route = route_by_keywords(q)
+            if route is None:
+                route_raw = engine.classify(q, system_prompt=ROUTER_SYSTEM_PROMPT)
+                route = "specific_fact" if "specific" in route_raw.lower() else "general_rag"
 
-            if "Specific Fact" in route:
-                # Path A: use the full text for precise extraction
-                context = full_text
-                chain = final_prompt | llm_pro | StrOutputParser()
-                answer = chain.invoke({"context": context, "question": q})
-                # For sources, still retrieve a few chunks as evidence
-                retrieved_docs = retriever.get_relevant_documents(q)
-                snippet = _format_docs(retrieved_docs[:1]) if retrieved_docs else ""
-                sources.append({"type": "full_text", "snippet": snippet})
-            else:
-                # Path B: retrieval-augmented generation
-                chain = (
-                    {"context": retriever | _format_docs, "question": RunnablePassthrough()}
-                    | final_prompt
-                    | llm_pro
-                    | StrOutputParser()
+            print(f"--- Answering: {q} (route: {route}) ---")
+
+            if route == "specific_fact":
+                doc_context = full_text[:12_000]
+                prompt = INSURANCE_SPECIFIC_FACT_PROMPT.format(
+                    context=doc_context, question=q
                 )
-                answer = chain.invoke(q)
-                retrieved_docs = retriever.get_relevant_documents(q)
-                snippet = _format_docs(retrieved_docs[:2]) if retrieved_docs else ""
+                answer = engine.generate(
+                    prompt=prompt,
+                    system_prompt=INSURANCE_SYSTEM_PROMPT,
+                    think=True,
+                )
+                sources.append({"type": "full_text"})
+            else:
+                docs = retriever.invoke(q)
+                chunk_context = "\n\n".join(d.page_content for d in docs[:5])
+                prompt = INSURANCE_GENERAL_PROMPT.format(
+                    context=chunk_context, question=q
+                )
+                answer = engine.generate(
+                    prompt=prompt,
+                    system_prompt=INSURANCE_SYSTEM_PROMPT,
+                )
+                snippet = "\n\n".join(d.page_content for d in docs[:2])
                 sources.append({"type": "retrieval", "snippet": snippet})
 
             answers.append(answer)
-        except Exception as e:  # keep pipeline robust per-question
+        except Exception as e:
             print(f"Error on question '{q}': {e}")
             answers.append(f"Error processing question: {e}")
             sources.append({"type": "error", "message": str(e)})
 
-    meta_out = {
-        "model_used": meta.get("model") if meta else "gemini-1.5-pro-latest",
-        "temperature": meta.get("temperature") if meta else 0,
-        "document_id": document_id,
+    return {
+        "answers": answers,
+        "sources": sources,
+        "meta": {
+            "engine": str(engine),
+            "tier": engine.tier,
+            "document_id": document_id,
+        },
     }
 
-    return {"answers": answers, "sources": sources, "meta": meta_out}
 
-
-def generate_questions_from_prompt_backend(prompt: str, n: int = 5) -> List[str]:
-    """Simple backend-side question generator.
-
-    You can later replace this with a Gemini call if you want smarter generation.
-    """
-    if not prompt:
-        return [f"Generic question #{i+1}" for i in range(n)]
-    tokens = [t.strip() for t in prompt.split() if len(t.strip()) > 3][:n]
-    if not tokens:
-        return [f"What does the document say about {prompt}?"]
-    return [f"What information is provided about {tok}?" for tok in tokens[:n]]
-
-
-# --- Routes ---
+# ── Routes ─────────────────────────────────────────────────────────────────────
 
 
 @app.get("/health")
 def health():
-    """Simple healthcheck returning component status"""
-    info = {
+    """System health check with model and hardware info."""
+    return jsonify({
         "status": "ok",
-        "service": "HealthyPartner backend",
+        "service": "HealthyPartner v2",
         "time": datetime.utcnow().isoformat(),
-        "routes": [
-            "/healthypartner/run",
-            "/healthypartner/generate",
-            "/webhook",
-            "/test",
-        ],
-    }
+        "engine": engine.health_check(),
+    })
+
+
+@app.get("/system/info")
+def system_info():
+    """Hardware detection and model tier recommendation."""
+    info = detect_system().to_dict()
+    info["current_tier"] = engine.tier
+    info["main_model"] = engine.main_model
+    info["fast_model"] = engine.fast_model
     return jsonify(info)
 
 
@@ -227,59 +167,34 @@ def hp_run():
         if not questions:
             return jsonify({"error": "no questions provided"}), 400
 
-        # accept base64 document or document_url
         doc_b64 = payload.get("documents")
         doc_url = payload.get("document_url")
         page_ranges = payload.get("page_ranges")
-        model = payload.get("model")
-        meta = {"model": model, "temperature": payload.get("temperature")}
+        meta = {"model": engine.main_model, "temperature": payload.get("temperature")}
 
-        # Save base64 to disk if provided
+        # Get document
         doc_path = None
         if doc_b64:
-            doc_path = save_base64_pdf(doc_b64, filename_prefix="hp_doc")
+            doc_path = save_base64_pdf(doc_b64, prefix="hp_doc")
         elif doc_url:
-            # Option A: download doc here (simple approach)
-            import requests
+            import requests as http_req
 
-            r = requests.get(doc_url, timeout=30)
+            r = http_req.get(doc_url, timeout=30)
             if r.status_code != 200:
-                return (
-                    jsonify(
-                        {
-                            "error": f"failed to fetch document_url (status {r.status_code})"
-                        }
-                    ),
-                    400,
-                )
+                return jsonify({"error": f"Failed to fetch URL (status {r.status_code})"}), 400
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            filename = f"remote_{ts}.pdf"
-            doc_path = os.path.join(DOWNLOAD_DIR, filename)
+            doc_path = os.path.join(DOWNLOAD_DIR, f"remote_{ts}.pdf")
             with open(doc_path, "wb") as f:
                 f.write(r.content)
         else:
-            return (
-                jsonify(
-                    {"error": "no document content provided (documents or document_url)"}
-                ),
-                400,
-            )
+            return jsonify({"error": "No document provided (documents or document_url)"}), 400
 
-        # Call your processing function (replace with production pipeline)
-        result = process_questions_for_document(
-            doc_path, questions, page_ranges=page_ranges, meta=meta
-        )
+        result = process_questions_for_document(doc_path, questions, page_ranges, meta)
+        return jsonify(result)
 
-        answers = result.get("answers", [])
-        sources = result.get("sources", [])
-        meta_out = result.get("meta", {})
-
-        response = {"answers": answers, "sources": sources, "meta": meta_out}
-        return jsonify(response)
-
-    except Exception as e:  # pragma: no cover - defensive
+    except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 @app.post("/healthypartner/generate")
@@ -289,9 +204,25 @@ def hp_generate():
         payload = request.get_json(force=True) or {}
         prompt = payload.get("prompt", "")
         n = int(payload.get("n", 5))
-        questions = generate_questions_from_prompt_backend(prompt, n)
+
+        if not prompt:
+            return jsonify({"questions": [f"Generic question #{i+1}" for i in range(n)]})
+
+        # Use LLM to generate relevant questions
+        sys_prompt = (
+            f"Generate exactly {n} specific questions someone might ask about "
+            f"a health insurance policy related to: {prompt}. "
+            f"Return only the questions, one per line, numbered."
+        )
+        raw = engine.generate(prompt=f"Topic: {prompt}", system_prompt=sys_prompt)
+        questions = [
+            line.strip().lstrip("0123456789.-) ")
+            for line in raw.split("\n")
+            if line.strip() and not line.strip().startswith("#")
+        ][:n]
+
         return jsonify({"questions": questions})
-    except Exception as e:  # pragma: no cover - defensive
+    except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -299,19 +230,45 @@ def hp_generate():
 @app.post("/webhook")
 def webhook():
     """Twilio webhook / other webhook entrypoint."""
-    # For compatibility, simply acknowledge if not integrated
     data = request.values.to_dict() or request.get_json(silent=True) or {}
-    # TODO: plug into your intent detection / agent pipeline
     return jsonify({"status": "received", "data": data})
 
 
 @app.post("/test")
 def test():
+    """Local testing endpoint — echo + model info."""
     payload = request.get_json(force=True) or {}
-    # simple echo for local testing
-    return jsonify({"ok": True, "echo": payload})
+    return jsonify({
+        "ok": True,
+        "echo": payload,
+        "engine": str(engine),
+        "tier": engine.tier,
+    })
 
+
+# ── Error handlers ─────────────────────────────────────────────────────────────
+
+
+@app.errorhandler(404)
+def not_found(_):
+    return jsonify({"error": "Endpoint not found"}), 404
+
+
+@app.errorhandler(500)
+def internal_error(_):
+    return jsonify({"error": "Internal server error"}), 500
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Flask dev server (use gunicorn / uvicorn for production)
+    print("\n" + "=" * 50)
+    print("🏥 HealthyPartner v2 — Local Healthcare AI")
+    print("=" * 50)
+    print(f"  Engine: {engine}")
+    print(f"  Tier:   {engine.tier}")
+    print(f"  Server: http://0.0.0.0:5000")
+    print(f"  No API keys required. Running 100% locally.")
+    print("=" * 50 + "\n")
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)

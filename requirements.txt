@@ -1,39 +1,43 @@
-# Web Framework & Server
+# HealthyPartner v2 — Dependencies
+# No cloud API packages. Everything runs locally.
+
+# ── Web Framework & Server ─────────────────────────────────────────────────────
 fastapi
 uvicorn[standard]
 requests
 aiofiles
 
-# LLM & LangChain Core
+# ── LLM Inference (Local) ─────────────────────────────────────────────────────
+ollama                          # Ollama Python client
 langchain
 langchain-core
-langchain-community # <-- THIS WAS MISSING
-langchain-google-genai
-langchain-openai
+langchain-community             # ChatOllama adapter
 
-# LangChain Integrations (Latest Versions)
+# ── Document Processing & RAG ──────────────────────────────────────────────────
 langchain-chroma
 langchain-huggingface
 langchain-unstructured
-
-# Document Processing & OCR
 unstructured[pdf,ocr]
-pytesseract
 pypdf
 
-# Vector Store & Embeddings
+# ── Vector Store & Embeddings ──────────────────────────────────────────────────
 chromadb
 sentence-transformers
 
-# Configuration
-python-dotenv
+# ── Enhanced Search ────────────────────────────────────────────────────────────
+rank-bm25                       # BM25 keyword search
 
-# Frontend (For local testing)
+# ── System & Config ────────────────────────────────────────────────────────────
+python-dotenv
+psutil                          # Hardware detection
+pyyaml                          # Configuration
+
+# ── OCR ────────────────────────────────────────────────────────────────────────
+easyocr
+
+# ── Frontend ───────────────────────────────────────────────────────────────────
 streamlit
 
-# Flask Backend & Twilio Integration
+# ── Messaging (WhatsApp/SMS) ───────────────────────────────────────────────────
 flask
 twilio
-
-# OCR for Medical Images
-easyocr
