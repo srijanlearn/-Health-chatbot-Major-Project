@@ -7,13 +7,16 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+*.egg-info/
+dist/
+build/
+.eggs/
 
 # ===========================
 # Virtual Environments
 # ===========================
 venv/
 .venv/
-.venv311/
 env/
 ENV/
 
@@ -36,31 +39,36 @@ ENV/
 # OS Files
 # ===========================
 .DS_Store
+._*
 Thumbs.db
+Desktop.ini
 
 # ===========================
-# Project-Specific Data
+# Runtime Data (auto-generated)
 # ===========================
-# Vector DB (auto-generated, large)
 db/
-
-# Downloaded files (runtime artifacts)
 downloaded_files/
 downloaded_images/
-
-# User sessions (runtime data)
 sessions/
+data/
 
 # ===========================
-# Build & Dist
+# Models (downloaded at runtime)
 # ===========================
-*.egg-info/
-dist/
-build/
-.eggs/
+models/
+*.gguf
+*.bin
+*.safetensors
 
 # ===========================
 # Logs
 # ===========================
 *.log
 logs/
+
+# ===========================
+# Training Artifacts
+# ===========================
+training/outputs/
+training/checkpoints/
+*.jsonl.bak

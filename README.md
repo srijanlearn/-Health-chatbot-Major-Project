@@ -1,192 +1,142 @@
-# 🏥 AI-Driven Healthcare Chatbot & Document Q&A System
+# HealthyPartner v2
 
-An intelligent, multi-purpose healthcare assistant combining **RAG-powered insurance document Q&A** with a **Twilio-integrated chatbot** for SMS/WhatsApp communication.
+**Privacy-first, locally-running healthcare AI platform for the Indian market.**
 
----
-
-## 🌟 Features
-
-| Feature | Description |
-|---|---|
-| 📄 **Insurance Policy Q&A** | RAG pipeline with dual-path routing (vector search + full-context) |
-| 💬 **Multi-Channel Messaging** | SMS & WhatsApp via Twilio |
-| 🔍 **Medical Document OCR** | Extract text from prescriptions, lab reports, insurance cards |
-| 🧠 **Intent Detection** | 9-category auto-classification for routing health queries |
-| 🗂️ **Session Management** | Multi-turn conversation history per user |
-| 🖥️ **Streamlit Frontend** | Interactive web UI for document Q&A |
+Zero cloud dependency. Zero API cost. 100% on-device inference. Runs on an 8 GB laptop.
 
 ---
 
-## 🏗️ Architecture
+## What It Does
+
+HealthyPartner is an AI-powered healthcare assistant that runs **entirely on your local device** — no data ever leaves your machine. It handles:
+
+- 🏥 **Insurance Policy Q&A** — Upload any health insurance PDF, ask questions in Hindi or English
+- 💊 **Prescription Analysis** — Photograph a prescription, get medication info and drug interaction warnings
+- 🔬 **Lab Report Interpretation** — Upload lab results, get plain-language explanations
+- 🩺 **Symptom Guidance** — Describe symptoms, get ICD-10 mapped guidance (always with "consult a doctor")
+- 📋 **Government Schemes** — Built-in knowledge of Ayushman Bharat (PMJAY), IRDAI regulations
+
+Accessible via **Web UI**, **WhatsApp**, or **REST API**.
+
+---
+
+## Architecture
 
 ```
-turingntesla2/
+User (WhatsApp / Web UI / API)
+        │
+        ▼
+┌─ Orchestration Layer ──────────────────┐
+│  Intent Classifier (Qwen3.5-0.6B)     │
+│  Knowledge Router (rules + LLM)       │
+│  Confidence Scorer                     │
+└──────────┬──────────────┬──────────────┘
+           │              │
+    ┌──────▼──┐    ┌──────▼──────────────┐
+    │Knowledge│    │  3-Stage RAG        │
+    │Graph    │    │  1. Hybrid Retrieve  │
+    │(instant)│    │  2. Cross-Encoder    │
+    │         │    │  3. Qwen3-4B Gen    │
+    └─────────┘    └─────────────────────┘
+           │              │
+           ▼              ▼
+    ┌────────────────────────────┐
+    │  Safety & Compliance       │
+    │  Medical disclaimers       │
+    │  Drug interaction warnings │
+    └────────────────────────────┘
+```
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| **Main LLM** | Qwen3-4B Q4 (~3 GB RAM) via Ollama |
+| **Fast LLM** | Qwen3.5-0.6B Q4 (~0.5 GB RAM) via Ollama |
+| **Embeddings** | multilingual-e5-small (Hindi + English) |
+| **Vector Store** | ChromaDB |
+| **Keyword Search** | BM25 (rank-bm25) |
+| **Reranker** | Cross-encoder (ms-marco-MiniLM-L-6-v2) |
+| **OCR** | EasyOCR |
+| **API** | FastAPI + Flask |
+| **Frontend** | Streamlit |
+| **WhatsApp** | Twilio (production) / Baileys (local) |
+
+## Project Structure
+
+```
+healthypartner/
 ├── app/
-│   ├── main.py                  # FastAPI RAG endpoint (/hackrx/run)
-│   ├── ingestion.py             # PDF ingestion → ChromaDB vector store
-│   ├── healthcare_agent.py      # Intent detection & response generation
-│   ├── ocr_processor.py         # EasyOCR medical image processing
-│   ├── session_manager.py       # Conversation & session tracking
-│   └── parsers.py               # Utility parsers
+│   ├── main.py               # FastAPI — RAG endpoint
+│   ├── llm_engine.py         # Unified local LLM engine (Ollama)
+│   ├── orchestrator.py       # Multi-step reasoning pipeline
+│   ├── healthcare_agent.py   # Intent detection & response generation
+│   ├── ingestion.py          # PDF → ChromaDB + BM25 hybrid search
+│   ├── ocr_processor.py      # EasyOCR medical image processing
+│   ├── session_manager.py    # Conversation & session tracking
+│   ├── parsers.py            # Utility parsers
+│   ├── prompts/              # Optimized prompt library
+│   │   ├── intent_classifier.py
+│   │   ├── insurance_qa.py
+│   │   ├── medical_safety.py
+│   │   └── router.py
+│   └── knowledge/            # Indian healthcare knowledge graph
+│       ├── graph.py
+│       └── data/             # IRDAI, PMJAY, drugs, ICD-10
 │
-├── healthcare_chatbot.py        # Flask app — Twilio webhook server
-├── healthypartner_backend.py    # Healthy Partner backend API
-├── frontend.py                  # Streamlit web UI
-├── build_knowledge_base.py      # Pre-build ChromaDB from local PDFs
-├── demo_rag.py                  # Quick RAG demo script
-├── test_chatbot.py              # Local chatbot testing (no Twilio needed)
-├── flask_test.py                # Minimal Flask test server
+├── installer/                # One-click deployment
+│   ├── setup.sh              # macOS/Linux installer
+│   ├── setup.bat             # Windows installer
+│   └── config.yaml           # Default configuration
 │
-├── Dockerfile                   # Container definition
-├── requirements.txt             # Python dependencies
-├── .env.example                 # Environment variable template
-└── constraints.txt              # Dependency version pins
+├── training/                 # Fine-tuning pipeline
+│   ├── prepare_data.py
+│   ├── finetune.py           # Unsloth + QLoRA
+│   ├── eval.py
+│   └── datasets/             # Training data
+│
+├── whatsapp/                 # WhatsApp local bridge
+│   └── bridge.py
+│
+├── healthcare_chatbot.py     # Flask — Twilio webhook server
+├── healthypartner_backend.py # HealthyPartner backend API
+├── frontend.py               # Streamlit web UI
+├── requirements.txt
+├── Dockerfile
+├── .env.example
+└── PROJECT.md                # Full project context & memory
 ```
 
-### Tech Stack
+## Quick Start
 
-- **LLM**: Google Gemini 1.5 Pro & Flash via LangChain
-- **Vector Store**: ChromaDB + HuggingFace `all-MiniLM-L6-v2` embeddings
-- **Document Loading**: LangChain + UnstructuredLoader
-- **OCR**: EasyOCR
-- **Messaging**: Twilio API (SMS/WhatsApp)
-- **Web UI**: Streamlit
-- **APIs**: FastAPI + Flask
+### Prerequisites
+- Python 3.11+
+- [Ollama](https://ollama.ai) installed
+- 8 GB RAM minimum
 
----
-
-## 🚀 Quick Start
-
-### 1. Clone & Setup
+### Install & Run
 
 ```bash
-git clone https://github.com/Srijan1419/turingntesla2.git
-cd turingntesla2
+# 1. Clone
+git clone https://github.com/srijanlearn/-Health-chatbot-Major-Project.git
+cd -Health-chatbot-Major-Project
 
+# 2. Setup
 python -m venv venv
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+
+# 3. Pull models
+ollama pull qwen3:4b
+ollama pull qwen3.5:0.6b
+
+# 4. Run
+python healthypartner_backend.py     # API on http://localhost:5000
+streamlit run frontend.py            # UI on http://localhost:8501
 ```
 
-### 2. Configure Environment
+No API keys needed. No cloud account. Just run.
 
-```bash
-cp .env.example .env
-# Edit .env and fill in your credentials
-```
+## License
 
-Required keys in `.env`:
-
-```env
-GOOGLE_API_KEY=your_google_api_key
-TWILIO_ACCOUNT_SID=your_twilio_sid
-TWILIO_AUTH_TOKEN=your_twilio_token
-TWILIO_PHONE_NUMBER=+1234567890
-```
-
-- **Google API Key**: https://makersuite.google.com/app/apikey
-- **Twilio Credentials**: https://console.twilio.com/
-
-### 3. Run
-
-**RAG API (FastAPI):**
-```bash
-uvicorn app.main:app --reload
-# Endpoint: POST http://localhost:8000/hackrx/run
-```
-
-**Healthcare Chatbot (Flask/Twilio):**
-```bash
-python healthcare_chatbot.py
-# Webhook: POST http://localhost:5000/webhook
-```
-
-**Streamlit UI:**
-```bash
-streamlit run frontend.py
-```
-
----
-
-## 🔌 API Reference
-
-### RAG Endpoint — `POST /hackrx/run`
-
-```json
-{
-  "documents": "https://url-to-pdf.com/policy.pdf",
-  "questions": ["What is the waiting period for cataracts?"],
-  "is_base64": false
-}
-```
-
-**Response:**
-```json
-{
-  "answers": ["The waiting period for cataracts is 2 years."]
-}
-```
-
-### Chatbot Endpoints (Flask)
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | Service info |
-| `GET` | `/health` | Health check |
-| `POST` | `/webhook` | Twilio incoming message handler |
-| `POST` | `/test` | Local test (no Twilio) |
-| `GET` | `/session/<user_id>` | View session history |
-| `DELETE` | `/session/<user_id>` | Clear session |
-
-**Local test:**
-```bash
-curl -X POST http://localhost:5000/test \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "test", "message": "What does my policy cover?"}'
-```
-
----
-
-## 🧪 Testing
-
-```bash
-# Test chatbot locally (no Twilio required)
-python test_chatbot.py
-
-# Quick RAG demo
-python demo_rag.py
-```
-
----
-
-## 🐳 Docker
-
-```bash
-docker build -t turingntesla2 .
-docker run -p 8000:8000 --env-file .env turingntesla2
-```
-
----
-
-## 📋 Intent Categories
-
-The chatbot auto-classifies queries into:
-`GREETING` · `INSURANCE_QUERY` · `PRESCRIPTION_INFO` · `SYMPTOM_CHECK` · `APPOINTMENT` · `LAB_RESULTS` · `GENERAL_HEALTH` · `DOCUMENT_UPLOAD` · `UNKNOWN`
-
----
-
-## 🔐 Security
-
-- `.env` is **never committed** — use `.env.example` as template
-- Twilio signature validation on all webhook requests
-- Sanitize all user inputs before LLM calls
-
----
-
-## 📄 License
-
-MIT — see [LICENSE](LICENSE) for details.
+MIT
