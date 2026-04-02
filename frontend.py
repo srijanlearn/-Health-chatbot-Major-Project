@@ -1,994 +1,359 @@
 """
-HealthyPartner — Enhanced Streamlit Frontend for LLM Document Q&A System
+HealthyPartner v2 — Streamlit Frontend
 
-Features:
-- Multi-document management with smart caching
-- Real-time response streaming
-- Evidence/sources display with citations
-- Multi-turn conversations with context
-- Advanced settings and model selection
-- Bulk question generation
-- Export capabilities (Markdown, JSON, CSV)
+Healthcare chat interface with local AI, document analysis, and knowledge graph.
+No cloud dependencies — all inference runs locally via Ollama.
+
+Endpoints used:
+  GET  /health             — Ollama connectivity + model status
+  GET  /system/info        — RAM, GPU, tier
+  POST /chat               — Free-form chat (no document)
+  POST /healthypartner/run — Document Q&A (PDF base64 + question)
 """
 
-import streamlit as st
-import requests
-import json
 import base64
 import time
-import hashlib
-import csv
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
-from enum import Enum
 
-# =============================================================================
-# Configuration & Constants
-# =============================================================================
+import requests
+import streamlit as st
 
-class ModelType(Enum):
-    QWEN3_4B = "qwen3:4b"
-    QWEN3_0_6B = "qwen2.5:0.5b"
-    OLLAMA_FALLBACK = "local-llama"
+# ── Configuration ───────────────────────────────────────────────────────────────
 
-@dataclass
-class Document:
-    id: str
-    name: str
-    bytes: Optional[bytes]
-    url: Optional[str]
-    uploaded_at: str
-    size: int
-    page_count: Optional[int] = None
-    
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "url": self.url,
-            "uploaded_at": self.uploaded_at,
-            "size": self.size,
-            "page_count": self.page_count
-        }
+DEFAULT_API_BASE = "http://localhost:8000"
 
-@dataclass
-class QAPair:
-    question: str
-    answer: str
-    sources: Optional[List[Any]]
-    timestamp: str
-    model: str
-    doc_id: str
-    
-# =============================================================================
-# Page Configuration
-# =============================================================================
+# Badge labels and colors for each pipeline route
+ROUTE_BADGES = {
+    "knowledge_graph": ("🗂 Knowledge Graph", "#16a34a", "#dcfce7"),
+    "specific_fact":   ("📄 Document Fact",   "#2563eb", "#dbeafe"),
+    "general_rag":     ("🔍 Document RAG",    "#7c3aed", "#ede9fe"),
+    "direct_llm":      ("🤖 AI Generated",    "#d97706", "#fef3c7"),
+    "static":          ("⚡ Instant",          "#64748b", "#f1f5f9"),
+    "emergency":       ("🚨 Emergency",        "#dc2626", "#fef2f2"),
+}
+
+INTENT_LABELS = {
+    "insurance_query":   "Insurance",
+    "symptom_check":     "Symptoms",
+    "prescription_info": "Prescription",
+    "lab_results":       "Lab Results",
+    "general_health":    "General Health",
+    "ayushman_bharat":   "Ayushman Bharat",
+    "drug_info":         "Drug Info",
+    "greeting":          "Greeting",
+    "emergency":         "Emergency",
+    "unknown":           "General",
+}
+
+# ── Page setup ──────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="HealthyPartner • Document Q&A",
+    page_title="HealthyPartner",
     page_icon="💚",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS for better styling
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
-    }
-    .main-header {
-        background: linear-gradient(135deg, #0f766e 0%, #064e3b 100%);
-        color: white;
-        padding: 2.5rem;
-        border-radius: 16px;
-        margin-bottom: 2.5rem;
-        box-shadow: 0 10px 25px rgba(6, 78, 59, 0.4);
-        position: relative;
-        overflow: hidden;
-    }
-    .main-header::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
-        transform: rotate(30deg);
-        pointer-events: none;
-    }
-    .main-header h1 {
-        color: white !important;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-    }
-    .main-header p {
-        color: #d1fae5 !important;
-        font-size: 1.1rem;
-        opacity: 0.9;
-    }
-    .doc-card {
-        padding: 1.5rem;
-        border: 1px solid rgba(229, 231, 235, 0.5);
-        border-radius: 12px;
-        margin-bottom: 1rem;
-        background: rgba(255, 255, 255, 0.8);
-        backdrop-filter: blur(10px);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 0 2px 10px rgba(0,0,0,0.02);
-    }
-    .doc-card:hover {
-        transform: translateY(-4px) scale(1.01);
-        border-color: #10b981;
-        box-shadow: 0 12px 20px rgba(16, 185, 129, 0.1);
-        background: white;
-    }
-    .answer-box {
-        background: linear-gradient(to right, #ffffff, #f8fafc);
-        padding: 1.75rem;
-        border-radius: 12px;
-        border-left: 5px solid #10b981;
-        margin: 1.5rem 0;
-        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
-        animation: fadeIn 0.5s ease-in-out;
-        color: #1e293b;
-        line-height: 1.6;
-        font-size: 1.05rem;
-    }
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    .source-box {
-        background: #f0fdf4;
-        padding: 1.25rem;
-        border-radius: 8px;
-        margin-top: 0.75rem;
-        font-size: 0.95rem;
-        border: 1px solid #dcfce7;
-        color: #166534;
-        transition: transform 0.2s;
-    }
-    .source-box:hover {
-        transform: translateX(4px);
-    }
-    .metric-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-        border-top: 4px solid #10b981;
-        transition: transform 0.2s ease;
-    }
-    .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.1);
-    }
-    
-    /* Streamlit button overrides */
-    .stButton>button {
-        border-radius: 8px !important;
-        font-weight: 600 !important;
-        transition: all 0.2s !important;
-    }
-    .stButton>button[kind="primary"] {
-        background: linear-gradient(to right, #059669, #10b981) !important;
-        border: none !important;
-        color: white !important;
-        box-shadow: 0 4px 6px rgba(16, 185, 129, 0.2) !important;
-    }
-    .stButton>button[kind="primary"]:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 12px rgba(16, 185, 129, 0.3) !important;
-    }
+[data-testid="stSidebar"] { background: #f0fdf4; }
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 { color: #15803d; }
+
+.route-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-right: 6px;
+}
+.doc-banner {
+    background: #dcfce7;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+    color: #15803d;
+}
+.latency-tag {
+    font-size: 0.7rem;
+    color: #94a3b8;
+    margin-top: 2px;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# =============================================================================
-# Session State Initialization
-# =============================================================================
+# ── Session state ───────────────────────────────────────────────────────────────
 
-def init_session_state():
-    """Initialize all session state variables with defaults"""
+def _init_state():
     defaults = {
-        'documents': {},  # id -> Document
-        'selected_doc_id': None,
-        'questions': [],
-        'qa_history': [],  # List of QAPair
-        'processing_log': [],
-        'cache': {},  # cache_key -> answers
-        'api_endpoint': 'http://localhost:5000/healthypartner/run',
-        'selected_model': ModelType.QWEN3_4B.value,
-        'streaming': True,
-        'temperature': 0.5,
-        'max_tokens': 1000,
-        'chunk_size': 1000,
-        'retries': 2,
-        'show_debug': False,
-        'conversation_context': [],  # For multi-turn conversations
+        "messages": [],       # [{"role": str, "content": str, "meta": dict}]
+        "active_doc": None,   # {"name": str, "b64": str, "size_kb": int}
+        "api_base": DEFAULT_API_BASE,
+        "health_cache": {},
+        "health_ts": 0.0,
     }
-    
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-init_session_state()
+_init_state()
 
-# =============================================================================
-# Utility Functions
-# =============================================================================
+# ── API helpers ─────────────────────────────────────────────────────────────────
 
-def make_doc_id(name: str, content: bytes) -> str:
-    """Generate stable document ID from content hash"""
-    hash_str = hashlib.sha256(content).hexdigest()[:12]
-    clean_name = "".join(c for c in name if c.isalnum() or c in "._-")[:30]
-    return f"{clean_name}_{hash_str}"
-
-def make_cache_key(doc_id: str, questions: List[str], model: str) -> str:
-    """Generate cache key for question set"""
-    q_hash = hashlib.md5(json.dumps(questions, sort_keys=True).encode()).hexdigest()[:8]
-    return f"{doc_id}_{model}_{q_hash}"
-
-def format_bytes(size: int) -> str:
-    """Format byte size to human readable"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size < 1024.0:
-            return f"{size:.1f} {unit}"
-        size /= 1024.0
-    return f"{size:.1f} TB"
-
-def log_message(msg: str, level: str = "INFO"):
-    """Add timestamped message to processing log"""
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    st.session_state.processing_log.append(f"[{timestamp}] {level}: {msg}")
-
-def extract_preview_text(pdf_bytes: bytes, max_chars: int = 500) -> str:
-    """Extract preview text from PDF (placeholder implementation)"""
-    # In production, use PyPDF2 or similar
-    return f"PDF document ({format_bytes(len(pdf_bytes))}). Preview requires backend processing."
-
-# =============================================================================
-# API Communication
-# =============================================================================
-
-def build_request_payload(
-    doc_id: str,
-    questions: List[str],
-    page_ranges: Optional[str] = None,
-    include_context: bool = False
-) -> Dict[str, Any]:
-    """Build request payload for backend API"""
-    doc = st.session_state.documents[doc_id]
-    
-    payload = {
-        "questions": questions,
-        "model": st.session_state.selected_model,
-        "temperature": float(st.session_state.temperature),
-        "max_tokens": int(st.session_state.max_tokens),
-        "chunk_size": int(st.session_state.chunk_size),
-        "is_base64": True,
-    }
-    
-    # Add document content
-    if doc.bytes:
-        payload["documents"] = base64.b64encode(doc.bytes).decode('utf-8')
-    else:
-        payload["documents"] = None
-        payload["document_url"] = doc.url
-    
-    # Add optional parameters
-    if page_ranges:
-        payload["page_ranges"] = page_ranges
-    
-    if include_context and st.session_state.conversation_context:
-        payload["conversation_context"] = st.session_state.conversation_context[-5:]
-    
-    return payload
-
-def call_backend_api(
-    doc_id: str,
-    questions: List[str],
-    page_ranges: Optional[str] = None,
-    progress_callback=None
-) -> Dict[str, Any]:
-    """Call backend API with retry logic and progress updates"""
-    payload = build_request_payload(doc_id, questions, page_ranges, include_context=True)
-    endpoint = st.session_state.api_endpoint
-    retries = int(st.session_state.retries)
-    
-    log_message(f"Calling API: {endpoint}")
-    
-    for attempt in range(retries + 1):
+def _get_health(force: bool = False) -> dict:
+    """Cached health check — re-fetches at most once every 30 s."""
+    now = time.time()
+    if force or now - st.session_state.health_ts > 30:
         try:
-            if progress_callback:
-                progress_callback(30 + (attempt * 10), f"Attempt {attempt + 1}/{retries + 1}")
-            
-            response = requests.post(
-                endpoint,
-                json=payload,
-                timeout=120,
-                headers={"Content-Type": "application/json"}
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            log_message(f"API call successful (status {response.status_code})")
-            
-            return result
-            
-        except requests.exceptions.Timeout:
-            log_message(f"Timeout on attempt {attempt + 1}", "WARNING")
-            if attempt < retries:
-                time.sleep(2 ** attempt)  # Exponential backoff
-        except requests.exceptions.RequestException as e:
-            log_message(f"Request error on attempt {attempt + 1}: {str(e)}", "ERROR")
-            if attempt < retries:
-                time.sleep(2 ** attempt)
-        except Exception as e:
-            log_message(f"Unexpected error: {str(e)}", "ERROR")
-            raise
-    
-    raise Exception(f"Failed after {retries + 1} attempts")
+            r = requests.get(f"{st.session_state.api_base}/health", timeout=3)
+            if r.status_code == 200:
+                st.session_state.health_cache = r.json()
+        except Exception:
+            st.session_state.health_cache = {}
+        st.session_state.health_ts = now
+    return st.session_state.health_cache
 
-def generate_questions_from_prompt(prompt: str, count: int = 5) -> List[str]:
-    """Generate questions using backend /generate endpoint"""
+
+def _get_system_info() -> dict:
     try:
-        gen_endpoint = st.session_state.api_endpoint.replace("/run", "/generate")
-        payload = {
-            "action": "generate_questions",
-            "prompt": prompt,
-            "n": count
-        }
-        
-        response = requests.post(gen_endpoint, json=payload, timeout=30)
-        response.raise_for_status()
-        
-        return response.json().get("questions", [])
-    except Exception as e:
-        log_message(f"Question generation failed: {e}", "WARNING")
-        # Fallback: generate basic questions
-        terms = [t.strip() for t in prompt.split() if len(t.strip()) > 3][:5]
-        return [f"What information is provided about {term}?" for term in terms]
+        r = requests.get(f"{st.session_state.api_base}/system/info", timeout=3)
+        return r.json() if r.status_code == 200 else {}
+    except Exception:
+        return {}
 
-# =============================================================================
-# UI Components
-# =============================================================================
 
-def render_sidebar():
-    """Render sidebar with settings and document management"""
-    with st.sidebar:
-        st.markdown("### ⚙️ Settings")
-        
-        # API Configuration
-        with st.expander("🔌 API Configuration", expanded=False):
-            api = st.text_input(
-                "Backend Endpoint",
-                value=st.session_state.api_endpoint,
-                help="URL of your HealthyPartner backend API"
-            )
-            st.session_state.api_endpoint = api
-            
-            if st.button("🔍 Test Connection"):
-                try:
-                    health_url = api.replace("/run", "/health")
-                    resp = requests.get(health_url, timeout=5)
-                    if resp.status_code == 200:
-                        st.success("✅ Connection successful")
-                    else:
-                        st.error(f"❌ Server returned {resp.status_code}")
-                except:
-                    st.error("❌ Cannot connect to backend")
-        
-        # Model Settings
-        with st.expander("🤖 Model Settings", expanded=True):
-            # Fetch dynamically if possible
-            try:
-                model_url = st.session_state.api_endpoint.replace("/run", "/models").replace("healthypartner/models", "models")
-                resp = requests.get(model_url, timeout=1)
-                if resp.status_code == 200:
-                    models = resp.json().get("available", [m.value for m in ModelType])
-                else:
-                    models = [m.value for m in ModelType]
-            except:
-                models = [m.value for m in ModelType]
-                
-            current_idx = models.index(st.session_state.selected_model) if st.session_state.selected_model in models else 0
-            
-            st.selectbox(
-                "Model",
-                models,
-                index=current_idx,
-                key="selected_model",
-                help="Select the LLM model for processing"
-            )
-            
-            st.slider(
-                "Temperature",
-                0.0, 1.0,
-                float(st.session_state.temperature),
-                0.05,
-                key="temperature",
-                help="Higher = more creative, Lower = more focused"
-            )
-            
-            st.number_input(
-                "Max Tokens",
-                64, 4000,
-                int(st.session_state.max_tokens),
-                100,
-                key="max_tokens",
-                help="Maximum response length"
-            )
-        
-        # Processing Settings
-        with st.expander("⚡ Processing Settings"):
-            st.number_input(
-                "Chunk Size (chars)",
-                200, 5000,
-                int(st.session_state.chunk_size),
-                100,
-                key="chunk_size"
-            )
-            
-            st.number_input(
-                "Retry Attempts",
-                0, 5,
-                int(st.session_state.retries),
-                key="retries"
-            )
-            
-            st.checkbox(
-                "Enable Streaming UI",
-                value=st.session_state.streaming,
-                key="streaming"
-            )
-        
-        st.markdown("---")
-        
-        # Document Summary
-        st.markdown("### 📚 Documents")
-        doc_count = len(st.session_state.documents)
-        st.metric("Total Uploaded", doc_count)
-        
-        if doc_count > 0:
-            total_size = sum(d.size for d in st.session_state.documents.values())
-            st.metric("Total Size", format_bytes(total_size))
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🗑️ Clear All", use_container_width=True):
-                st.session_state.documents = {}
-                st.session_state.selected_doc_id = None
-                st.session_state.cache = {}
-                st.rerun()
-        
-        with col2:
-            if st.button("🔄 Refresh", use_container_width=True):
-                st.rerun()
-        
-        st.markdown("---")
-        
-        # Debug Tools
-        st.markdown("### 🐛 Debug")
-        st.checkbox("Show Debug Info", key="show_debug")
-        
-        if st.button("📋 View Logs"):
-            with st.expander("Processing Logs", expanded=True):
-                for log in st.session_state.processing_log[-50:]:
-                    st.text(log)
-        
-        if st.button("🧹 Clear Cache"):
-            st.session_state.cache = {}
-            st.session_state.processing_log = []
-            st.success("Cache cleared")
-
-def render_document_manager():
-    """Render document upload and management interface"""
-    st.markdown("### 📎 Document Management")
-    
-    tab1, tab2 = st.tabs(["📤 Upload", "📋 Manage"])
-    
-    with tab1:
-        # File Upload
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            uploaded_files = st.file_uploader(
-                "Upload PDF Documents",
-                type=['pdf'],
-                accept_multiple_files=True,
-                help="Upload one or more PDF documents for analysis"
-            )
-            
-            if uploaded_files:
-                for file in uploaded_files:
-                    file_bytes = file.read()
-                    doc_id = make_doc_id(file.name, file_bytes)
-                    
-                    if doc_id not in st.session_state.documents:
-                        doc = Document(
-                            id=doc_id,
-                            name=file.name,
-                            bytes=file_bytes,
-                            url=None,
-                            uploaded_at=datetime.now().isoformat(),
-                            size=len(file_bytes)
-                        )
-                        st.session_state.documents[doc_id] = doc
-                        st.success(f"✅ Added: {file.name}")
-                        log_message(f"Document uploaded: {file.name}")
-                    else:
-                        st.info(f"ℹ️ Already uploaded: {file.name}")
-                
-                if uploaded_files:
-                    st.session_state.selected_doc_id = doc_id
-        
-        with col2:
-            st.markdown("**Quick Stats**")
-            if st.session_state.documents:
-                st.metric("Documents", len(st.session_state.documents))
-        
-        # URL Input
-        st.markdown("**Or fetch from URL:**")
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            url = st.text_input(
-                "PDF URL",
-                placeholder="https://example.com/document.pdf",
-                label_visibility="collapsed"
-            )
-        
-        with col2:
-            if st.button("📥 Fetch", use_container_width=True):
-                if url:
-                    try:
-                        filename = url.split("/")[-1] or "remote_doc.pdf"
-                        doc_id = f"{filename}_{hash(url) & 0xffffffff:08x}"
-                        
-                        doc = Document(
-                            id=doc_id,
-                            name=filename,
-                            bytes=None,
-                            url=url,
-                            uploaded_at=datetime.now().isoformat(),
-                            size=0
-                        )
-                        st.session_state.documents[doc_id] = doc
-                        st.session_state.selected_doc_id = doc_id
-                        st.success(f"✅ Registered: {filename}")
-                        log_message(f"Remote document registered: {url}")
-                    except Exception as e:
-                        st.error(f"Failed to register URL: {e}")
-    
-    with tab2:
-        # Document List
-        if not st.session_state.documents:
-            st.info("📭 No documents uploaded yet")
-        else:
-            for doc_id, doc in st.session_state.documents.items():
-                is_selected = doc_id == st.session_state.selected_doc_id
-                
-                with st.container():
-                    col1, col2, col3 = st.columns([6, 2, 1])
-                    
-                    with col1:
-                        label = f"{'✅' if is_selected else '📄'} **{doc.name}**"
-                        if st.button(label, key=f"sel_{doc_id}", use_container_width=True):
-                            st.session_state.selected_doc_id = doc_id
-                            st.rerun()
-                    
-                    with col2:
-                        size_str = format_bytes(doc.size) if doc.size > 0 else "Remote"
-                        st.caption(size_str)
-                    
-                    with col3:
-                        if st.button("🗑️", key=f"del_{doc_id}"):
-                            del st.session_state.documents[doc_id]
-                            if st.session_state.selected_doc_id == doc_id:
-                                st.session_state.selected_doc_id = None
-                            st.rerun()
-                
-                if is_selected:
-                    with st.expander("📋 Document Details", expanded=False):
-                        st.json(doc.to_dict())
-
-def render_question_interface():
-    """Render question input and submission interface"""
-    st.markdown("### ❓ Ask Questions")
-    
-    if not st.session_state.selected_doc_id:
-        st.warning("⚠️ Please select a document first")
-        return
-    
-    # Selected document info
-    doc = st.session_state.documents[st.session_state.selected_doc_id]
-    st.info(f"📄 Selected: **{doc.name}** ({format_bytes(doc.size)})")
-    
-    # Question templates
-    with st.expander("📝 Question Templates"):
-        templates = [
-            "What are the main coverage details for [condition/procedure]?",
-            "Are there any exclusions related to [topic]?",
-            "What documentation is required for [claim/procedure]?",
-            "What is the policy on [specific scenario]?",
-            "Summarize the section about [topic].",
-        ]
-        
-        cols = st.columns(2)
-        for idx, template in enumerate(templates):
-            with cols[idx % 2]:
-                if st.button(template, key=f"tmpl_{idx}", use_container_width=True):
-                    st.session_state.questions.append(template)
-                    st.rerun()
-    
-    # Dynamic question inputs
-    st.markdown("**Your Questions:**")
-    
-    num_questions = st.number_input(
-        "Number of questions",
-        min_value=1,
-        max_value=10,
-        value=max(len(st.session_state.questions), 1)
+def _chat(message: str) -> dict:
+    """Call /chat — no document required."""
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages[-10:]
+    ]
+    r = requests.post(
+        f"{st.session_state.api_base}/chat",
+        json={"message": message, "conversation_history": history},
+        timeout=90,
     )
-    
-    questions = []
-    for i in range(num_questions):
-        default = st.session_state.questions[i] if i < len(st.session_state.questions) else ""
-        q = st.text_area(
-            f"Question {i + 1}",
-            value=default,
-            key=f"q_input_{i}",
-            height=100,
-            placeholder="Enter your question here..."
-        )
-        if q.strip():
-            questions.append(q.strip())
-    
-    st.session_state.questions = questions
-    
-    # Page range filter
-    page_range = st.text_input(
-        "Page Range (optional)",
-        placeholder="e.g., 1-5, 8, 10-12",
-        help="Restrict analysis to specific pages"
+    r.raise_for_status()
+    return r.json()  # ChatResponse fields
+
+
+def _document_qa(message: str, doc_b64: str) -> dict:
+    """Call /healthypartner/run — PDF document Q&A."""
+    r = requests.post(
+        f"{st.session_state.api_base}/healthypartner/run",
+        json={"documents": doc_b64, "questions": [message], "is_base64": True},
+        timeout=120,
     )
-    
-    # Action buttons
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        submit = st.button(
-            "🚀 Get Answers",
-            type="primary",
-            use_container_width=True,
-            disabled=len(questions) == 0
-        )
-    
-    with col2:
-        if st.button("🗑️ Clear", use_container_width=True):
-            st.session_state.questions = []
+    r.raise_for_status()
+    data = r.json()
+    return {
+        "response": data["answers"][0] if data.get("answers") else "No answer returned.",
+        "route": "general_rag",
+        "intent": "insurance_query",
+        "language": "en",
+        "is_emergency": False,
+        "latency_ms": 0,
+    }
+
+# ── UI helpers ──────────────────────────────────────────────────────────────────
+
+def _badge_html(route: str, intent: str, latency_ms: float) -> str:
+    label, color, bg = ROUTE_BADGES.get(route, ("🤖 AI Generated", "#d97706", "#fef3c7"))
+    intent_label = INTENT_LABELS.get(intent, intent or "General")
+    latency_str = f"{latency_ms:.0f} ms" if latency_ms else ""
+    html = (
+        f'<span class="route-badge" style="background:{bg}; color:{color}; '
+        f'border:1px solid {color}40">{label}</span>'
+        f'<span class="route-badge" style="background:#f1f5f9; color:#475569; '
+        f'border:1px solid #e2e8f0">{intent_label}</span>'
+    )
+    if latency_str:
+        html += f'<span class="latency-tag">{latency_str}</span>'
+    return html
+
+
+def _status_indicator(ok: bool, label: str) -> str:
+    dot = "🟢" if ok else "🔴"
+    return f"{dot} {label}"
+
+# ── Sidebar ─────────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.markdown("## 💚 HealthyPartner")
+    st.caption("Privacy-first local healthcare AI")
+    st.divider()
+
+    # Connection status
+    health = _get_health()
+    ollama_ok = health.get("ollama_connected", False)
+    main_ok   = health.get("models", {}).get("main_model", False)
+    fast_ok   = health.get("models", {}).get("fast_model", False)
+
+    st.markdown(_status_indicator(ollama_ok, "Ollama"))
+    st.markdown(_status_indicator(main_ok, f"`{health.get('models', {}).get('main_model_name', 'main model')}`"))
+    st.markdown(_status_indicator(fast_ok, f"`{health.get('models', {}).get('fast_model_name', 'fast model')}`"))
+
+    if not ollama_ok:
+        st.warning("Start Ollama: `ollama serve`", icon="⚠️")
+    elif not main_ok:
+        models = health.get("models", {})
+        st.warning(f"`ollama pull {models.get('main_model_name', 'qwen3:4b')}`", icon="⚠️")
+
+    if st.button("↺ Refresh status", use_container_width=True):
+        _get_health(force=True)
+        st.rerun()
+
+    st.divider()
+
+    # Document upload
+    st.markdown("### 📎 Document")
+
+    if st.session_state.active_doc:
+        doc = st.session_state.active_doc
+        st.success(f"📄 {doc['name']}  ({doc['size_kb']} KB)", icon="✅")
+        if st.button("Remove document", use_container_width=True):
+            st.session_state.active_doc = None
             st.rerun()
-    
-    with col3:
-        if st.button("💾 Save Q's", use_container_width=True):
-            if questions:
-                q_text = "\n".join(questions)
-                st.download_button(
-                    "Download",
-                    q_text,
-                    file_name="questions.txt",
-                    use_container_width=True
-                )
-    
-    # Handle submission
-    if submit:
-        process_questions(questions, page_range)
-
-def process_questions(questions: List[str], page_range: Optional[str] = None):
-    """Process questions and get answers from backend"""
-    doc_id = st.session_state.selected_doc_id
-    model = st.session_state.selected_model
-    
-    # Check cache
-    cache_key = make_cache_key(doc_id, questions, model)
-    
-    if cache_key in st.session_state.cache:
-        st.success("⚡ Using cached results")
-        qa_pairs = st.session_state.cache[cache_key]
-        st.session_state.qa_history.extend(qa_pairs)
-        return
-    
-    # Show progress
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    def update_progress(pct, msg):
-        progress_bar.progress(pct)
-        status_text.text(msg)
-    
-    try:
-        update_progress(10, "📄 Preparing document...")
-        time.sleep(0.5)
-        
-        update_progress(20, "🔄 Calling backend API...")
-        result = call_backend_api(doc_id, questions, page_range, update_progress)
-        
-        update_progress(90, "📝 Processing responses...")
-        
-        # Parse results
-        answers = result.get("answers") or result.get("responses") or []
-        sources = result.get("sources") or result.get("evidence") or [None] * len(answers)
-        
-        # Create QA pairs
-        qa_pairs = []
-        for q, a, s in zip(questions, answers, sources):
-            qa_pair = QAPair(
-                question=q,
-                answer=a or "No answer provided",
-                sources=s,
-                timestamp=datetime.now().isoformat(),
-                model=model,
-                doc_id=doc_id
-            )
-            qa_pairs.append(qa_pair)
-        
-        # Update session state
-        st.session_state.qa_history.extend(qa_pairs)
-        st.session_state.cache[cache_key] = qa_pairs
-        
-        # Add to conversation context
-        for qa in qa_pairs:
-            st.session_state.conversation_context.append({
-                "question": qa.question,
-                "answer": qa.answer
-            })
-        
-        update_progress(100, "✅ Complete!")
-        time.sleep(0.5)
-        progress_bar.empty()
-        status_text.empty()
-        
-        st.success(f"✅ Processed {len(qa_pairs)} questions successfully")
-        log_message(f"Successfully processed {len(qa_pairs)} questions")
-        
-    except Exception as e:
-        progress_bar.empty()
-        status_text.empty()
-        st.error(f"❌ Error: {str(e)}")
-        log_message(f"Processing failed: {str(e)}", "ERROR")
-
-def render_results():
-    """Render Q&A results and history"""
-    st.markdown("### 💡 Answers & Insights")
-    
-    if not st.session_state.qa_history:
-        st.info("📭 No answers yet. Submit questions in the Questions tab.")
-        return
-    
-    # Show recent answers
-    for idx, qa in enumerate(reversed(st.session_state.qa_history[-10:]), start=1):
-        with st.expander(f"**Q{idx}:** {qa.question[:100]}...", expanded=(idx == 1)):
-            # Answer
-            st.markdown("#### 💬 Answer")
-            st.markdown(f'<div class="answer-box">{qa.answer}</div>', unsafe_allow_html=True)
-            
-            # Sources
-            if qa.sources:
-                st.markdown("#### 📚 Sources & Evidence")
-                sources_list = qa.sources if isinstance(qa.sources, list) else [qa.sources]
-                for s_idx, source in enumerate(sources_list, 1):
-                    st.markdown(f'<div class="source-box">**Source {s_idx}:** {source}</div>', unsafe_allow_html=True)
-            
-            # Metadata
-            with st.expander("ℹ️ Metadata"):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.caption(f"**Model:** {qa.model}")
-                with col2:
-                    st.caption(f"**Time:** {qa.timestamp[:19]}")
-                with col3:
-                    doc = st.session_state.documents.get(qa.doc_id)
-                    st.caption(f"**Doc:** {doc.name if doc else 'Unknown'}")
-            
-            # Follow-up
-            follow_up = st.text_input(f"Follow-up question", key=f"follow_{idx}")
-            if st.button(f"Ask Follow-up", key=f"ask_follow_{idx}"):
-                if follow_up.strip():
-                    st.session_state.questions = [follow_up.strip()]
-                    st.rerun()
-
-def render_export():
-    """Render export functionality"""
-    st.markdown("### 📥 Export Results")
-    
-    if not st.session_state.qa_history:
-        st.info("No data to export")
-        return
-    
-    col1, col2, col3 = st.columns(3)
-    
-    # Markdown export
-    with col1:
-        md_content = "# HealthyPartner Q&A Export\n\n"
-        md_content += f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        md_content += "---\n\n"
-        
-        for idx, qa in enumerate(st.session_state.qa_history, 1):
-            md_content += f"## Question {idx}\n\n"
-            md_content += f"**Q:** {qa.question}\n\n"
-            md_content += f"**A:** {qa.answer}\n\n"
-            if qa.sources:
-                md_content += f"**Sources:** {qa.sources}\n\n"
-            md_content += "---\n\n"
-        
-        st.download_button(
-            "📄 Download Markdown",
-            md_content,
-            file_name=f"healthypartner_qa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-            mime="text/markdown",
-            use_container_width=True
+    else:
+        uploaded = st.file_uploader(
+            "Upload PDF (insurance policy, prescription, lab report)",
+            type=["pdf"],
+            label_visibility="collapsed",
         )
-    
-    # JSON export
-    with col2:
-        json_content = json.dumps(
-            [asdict(qa) for qa in st.session_state.qa_history],
-            indent=2,
-            default=str
-        )
-        
-        st.download_button(
-            "📊 Download JSON",
-            json_content,
-            file_name=f"healthypartner_qa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json",
-            use_container_width=True
-        )
-    
-    # CSV export
-    with col3:
-        csv_content = "Question,Answer,Model,Timestamp,Document\n"
-        for qa in st.session_state.qa_history:
-            doc = st.session_state.documents.get(qa.doc_id)
-            doc_name = doc.name if doc else "Unknown"
-            csv_content += f'"{qa.question}","{qa.answer}","{qa.model}","{qa.timestamp}","{doc_name}"\n'
-        
-        st.download_button(
-            "📑 Download CSV",
-            csv_content,
-            file_name=f"healthypartner_qa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
-def render_bulk_tools():
-    """Render bulk import and question generation tools"""
-    st.markdown("### 🗂️ Bulk Operations")
-    
-    tab1, tab2 = st.tabs(["📝 Bulk Import", "⚡ Auto-Generate"])
-    
-    with tab1:
-        st.markdown("**Import Multiple Questions**")
-        bulk_text = st.text_area(
-            "Paste questions (one per line)",
-            height=200,
-            placeholder="What is the coverage for X?\nAre there exclusions for Y?\nHow to claim Z?"
-        )
-        
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            if st.button("➕ Import Questions", use_container_width=True):
-                if bulk_text.strip():
-                    new_questions = [q.strip() for q in bulk_text.split('\n') if q.strip()]
-                    st.session_state.questions = new_questions
-                    st.success(f"✅ Replaced with {len(new_questions)} questions")
-                    st.rerun()
-    
-    with tab2:
-        st.markdown("**AI-Powered Question Generation**")
-        
-        seed_prompt = st.text_area(
-            "Describe what you want to know",
-            height=100,
-            placeholder="e.g., 'insurance coverage for maternity care, including prenatal visits, delivery, and postpartum care'"
-        )
-        
-        num_questions = st.slider("Number of questions to generate", 3, 15, 5)
-        
-        if st.button("✨ Generate Questions", use_container_width=True):
-            if seed_prompt.strip():
-                with st.spinner("Generating questions..."):
-                    try:
-                        generated = generate_questions_from_prompt(seed_prompt, num_questions)
-                        st.session_state.questions.extend(generated)
-                        st.success(f"✅ Generated {len(generated)} questions")
-                        
-                        # Show preview
-                        with st.expander("📋 Generated Questions", expanded=True):
-                            for i, q in enumerate(generated, 1):
-                                st.write(f"{i}. {q}")
-                        
-                        log_message(f"Generated {len(generated)} questions from prompt")
-                    except Exception as e:
-                        st.error(f"Generation failed: {e}")
-
-# =============================================================================
-# Main Application
-# =============================================================================
-
-def main():
-    """Main application entry point"""
-    
-    # Header
-    st.markdown("""
-    <div class="main-header">
-        <h1 style="color: white; margin: 0;">💚 HealthyPartner</h1>
-        <p style="color: white; margin: 0; opacity: 0.9;">
-            Intelligent Document Q&A System • Upload PDFs, ask questions, get evidence-backed answers
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Render sidebar
-    render_sidebar()
-    
-    # Main content tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📤 Documents & Questions",
-        "💡 Results",
-        "📥 Export",
-        "🗂️ Bulk Tools"
-    ])
-    
-    with tab1:
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            render_document_manager()
-        
-        with col2:
-            render_question_interface()
-    
-    with tab2:
-        render_results()
-    
-    with tab3:
-        render_export()
-    
-    with tab4:
-        render_bulk_tools()
-    
-    # Debug info
-    if st.session_state.show_debug:
-        with st.expander("🐛 Debug Information", expanded=False):
-            st.markdown("**Session State:**")
-            debug_state = {
-                "documents": len(st.session_state.documents),
-                "selected_doc": st.session_state.selected_doc_id,
-                "questions": len(st.session_state.questions),
-                "qa_history": len(st.session_state.qa_history),
-                "cache_size": len(st.session_state.cache),
-                "api_endpoint": st.session_state.api_endpoint,
-                "model": st.session_state.selected_model,
+        if uploaded:
+            raw = uploaded.read()
+            st.session_state.active_doc = {
+                "name": uploaded.name,
+                "b64": base64.b64encode(raw).decode("utf-8"),
+                "size_kb": round(len(raw) / 1024),
             }
-            st.json(debug_state)
-    
-    # Footer
-    st.markdown("---")
+            st.rerun()
+        st.caption("No document — general health chat mode")
+
+    st.divider()
+
+    # System info
+    tier = health.get("tier", "")
+    if tier:
+        labels = {"ultra_light": "Ultra-light", "balanced": "Balanced", "quality": "Quality"}
+        st.caption(f"**Tier:** {labels.get(tier, tier)}")
+
+    sys_info = _get_system_info()
+    if sys_info:
+        ram  = sys_info.get("total_ram_gb", 0)
+        gpu  = sys_info.get("gpu_name") or ("None" if not sys_info.get("gpu_available") else "")
+        arch = sys_info.get("arch", "")
+        st.caption(f"RAM {ram:.0f} GB  ·  GPU: {gpu}  ·  {arch}")
+
+    st.divider()
+
+    with st.expander("⚙️ Settings"):
+        new_base = st.text_input("API endpoint", value=st.session_state.api_base)
+        if new_base != st.session_state.api_base:
+            st.session_state.api_base = new_base
+            _get_health(force=True)
+
+        if st.button("Clear chat history", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+
+# ── Main chat area ──────────────────────────────────────────────────────────────
+
+st.markdown("## 🏥 HealthyPartner")
+
+# Active document banner
+if st.session_state.active_doc:
+    st.markdown(
+        f'<div class="doc-banner">📄 <strong>{st.session_state.active_doc["name"]}</strong>'
+        f" ({st.session_state.active_doc['size_kb']} KB) — "
+        f"questions will be answered from this document</div>",
+        unsafe_allow_html=True,
+    )
+
+# Empty state
+if not st.session_state.messages:
     st.markdown("""
-    <div style="text-align: center; color: #6b7280; padding: 2rem;">
-        <p><strong>HealthyPartner</strong> • Powered by Advanced LLMs</p>
-        <p style="font-size: 0.9rem;">
-            Need help? Check the <a href="#" style="color: #22c55e;">documentation</a> or 
-            <a href="#" style="color: #22c55e;">contact support</a>
+    <div style="text-align:center; padding:3rem 0; color:#94a3b8;">
+        <div style="font-size:3rem; margin-bottom:1rem">💚</div>
+        <p style="font-size:1.1rem; color:#475569; font-weight:500;">
+            Ask about health insurance, prescriptions, lab reports, or general health.
+        </p>
+        <p style="font-size:0.85rem;">
+            Upload a PDF in the sidebar for document-specific questions.
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-if __name__ == "__main__":
-    main()
+# Render chat history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+        if msg["role"] == "assistant":
+            meta = msg.get("meta", {})
+            st.markdown(
+                _badge_html(
+                    meta.get("route", "direct_llm"),
+                    meta.get("intent", "unknown"),
+                    meta.get("latency_ms", 0),
+                ),
+                unsafe_allow_html=True,
+            )
+
+# Chat input
+user_input = st.chat_input("Ask a health question…")
+
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    with st.chat_message("user"):
+        st.write(user_input)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking…"):
+            try:
+                if st.session_state.active_doc:
+                    result = _document_qa(user_input, st.session_state.active_doc["b64"])
+                else:
+                    result = _chat(user_input)
+
+                st.write(result["response"])
+                st.markdown(
+                    _badge_html(
+                        result.get("route", "direct_llm"),
+                        result.get("intent", "unknown"),
+                        result.get("latency_ms", 0),
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": result["response"],
+                    "meta": {
+                        "route":        result.get("route", "direct_llm"),
+                        "intent":       result.get("intent", "unknown"),
+                        "language":     result.get("language", "en"),
+                        "is_emergency": result.get("is_emergency", False),
+                        "latency_ms":   result.get("latency_ms", 0),
+                    },
+                })
+
+            except requests.exceptions.ConnectionError:
+                msg = (
+                    "Cannot connect to the backend. Start it with:\n\n"
+                    "```bash\nuvicorn app.main:app --reload\n```"
+                )
+                st.error(msg)
+                st.session_state.messages.append({"role": "assistant", "content": msg, "meta": {}})
+
+            except requests.exceptions.HTTPError as e:
+                msg = f"Backend error {e.response.status_code}: {e.response.text[:200]}"
+                st.error(msg)
+                st.session_state.messages.append({"role": "assistant", "content": msg, "meta": {}})
+
+            except Exception as e:
+                msg = f"Unexpected error: {e}"
+                st.error(msg)
+                st.session_state.messages.append({"role": "assistant", "content": msg, "meta": {}})

@@ -128,9 +128,9 @@ Build the **#1 locally-running healthcare AI platform** for the Indian market. A
 |---|-------|----------|-----------|--------|
 | 1 | **Local LLM Engine** — `llm_engine.py`, Gemini removal, requirements | 🔴 Critical | 2-3 days | ✅ Completed |
 | 2 | **Prompt Engineering + Orchestration** — prompts/, orchestrator | 🔴 Critical | 2-3 days | ✅ Completed |
-| 3 | **Knowledge Graph + Hybrid Search** — knowledge/, ingestion upgrade | 🟡 High | 2-3 days | 🟡 In Progress |
+| 3 | **Knowledge Graph + Hybrid Search** — knowledge/, ingestion upgrade | 🟡 High | 2-3 days | ✅ Completed |
 | 4 | **One-Click Installer** — installer/, Dockerfile | 🟡 High | 2 days | ⬜ Not started |
-| 5 | **Frontend** — local-first UI, admin panel | 🟡 High | 1-2 days | 🟡 In Progress |
+| 5 | **Frontend** — local-first UI, admin panel | 🟡 High | 1-2 days | ✅ Completed |
 | 6 | **Fine-Tuning Pipeline** — training/ (Unsloth+QLoRA) | 🟠 Medium | 3-5 days | ⬜ Not started |
 | 7 | **WhatsApp Local Bridge** — whatsapp/ | 🟢 Future | 2-3 days | ⬜ Not started |
 
@@ -201,4 +201,16 @@ Build the **#1 locally-running healthcare AI platform** for the Indian market. A
 
 ---
 
-*Last updated: 2026-04-02*
+### 2026-04-03 — Orchestrator wired in + Frontend rewrite
+
+- **Fixed critical gap**: `app/main.py` was bypassing the Orchestrator entirely (doing its own routing). Now both `/chat` and `/healthypartner/run` run the full 7-step pipeline.
+- **Added `/chat` endpoint**: Free-form healthcare chat without a document — intent classify → KG lookup → LLM generate.
+- **`KnowledgeGraph` initialised at startup** and passed to Orchestrator (Phase 3 data now live).
+- **`frontend.py` complete rewrite** (962 lines → 327 lines):
+  - `st.chat_message` chat interface replacing batch Q&A tabs
+  - Sidebar: live Ollama status (🟢/🔴), model names, RAM/GPU/arch, PDF uploader
+  - Per-message route badges: 🗂 Knowledge Graph / 📄 Document Fact / 🔍 RAG / 🤖 LLM / 🚨 Emergency
+  - Removed all Gemini/GPT4 model references
+  - API base fixed from `localhost:5000` → `localhost:8000`
+
+*Last updated: 2026-04-03*
