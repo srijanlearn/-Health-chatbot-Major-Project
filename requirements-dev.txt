@@ -1,0 +1,5 @@
+# Dev / test dependencies — install with: pip install -r requirements-dev.txt
+pytest
+pytest-asyncio
+httpx                   # async HTTP client used by FastAPI TestClient
+locust                  # load testing

@@ -122,6 +122,37 @@ Build the **#1 locally-running healthcare AI platform** for the Indian market. A
 
 ---
 
+## 🧠 How We Work (Development Philosophy)
+
+> This is the agreed working method between Aman and Claude for this project.
+
+### The Loop
+```
+Plan → Implement → Test → Stress Test → Optimise → back to Plan
+```
+
+1. **Plan first** — Before any implementation, create a comprehensive plan of what's missing, what needs to be built, and in what order (prioritised by weight/impact).
+2. **Implement** — Build exactly what the plan says. No scope creep, no speculative features.
+3. **Test** — Unit tests, integration tests, golden eval harness. Nothing ships untested.
+4. **Stress test** — Concurrent load, memory leak detection, edge cases. Production-level validation.
+5. **Optimise** — Come back to the scratchpad, identify bottlenecks, tighten what's already there.
+6. **Repeat** — Start the loop again with a cleaner, tighter baseline.
+
+### Standards
+- **Industry best practices always** — if there's a standard way to do something, we do it that way.
+- **No shortcuts that become debt** — a fast hack today is a rewrite next month.
+- **One backend, one truth** — no duplicate code paths, no parallel implementations.
+- **Everything tested before it ships** — code that isn't tested doesn't exist.
+
+### Target Product
+- Locally-running, privacy-first healthcare AI for the Indian market
+- Runs on customer's own hardware (hospital, clinic, pharmacy)
+- Customer configures their own knowledge base (formulary, schemes, policies)
+- Aman provides setup assistance as a service — that's the revenue model
+- Must be the best possible software, not just a proof of concept
+
+---
+
 ## 🗺️ Execution Phases
 
 | # | Phase | Priority | Est. Time | Status |
@@ -133,6 +164,112 @@ Build the **#1 locally-running healthcare AI platform** for the Indian market. A
 | 5 | **Frontend** — local-first UI, admin panel | 🟡 High | 1-2 days | ✅ Completed |
 | 6 | **Fine-Tuning Pipeline** — training/ (Unsloth+QLoRA) | 🟠 Medium | 3-5 days | ✅ Completed |
 | 7 | **WhatsApp Local Bridge** — whatsapp/ | 🟢 Future | 2-3 days | ⬜ Not started |
+
+---
+
+## 🚧 Comprehensive Gap Analysis & Build Plan
+
+> Created 2026-04-03. This is the master backlog — ordered by priority. Each item must be planned → implemented → tested → stress-tested before moving to the next.
+
+### GAP-001 — Kill the Flask backend (BLOCKER)
+- **Problem**: `healthypartner_backend.py` (Flask) and `app/main.py` (FastAPI) both expose `/chat` and `/healthypartner/run` with diverging logic. Flask `/chat` bypasses the Orchestrator — no emergency detection, no KG lookup, hardcoded metadata.
+- **Action**: Delete `healthypartner_backend.py`. Migrate any unique endpoints (e.g. `/webhook` for Twilio) into `app/main.py`.
+- **Test**: All existing endpoints respond identically from FastAPI. No Flask process running.
+- **Status**: ✅ Done (2026-04-04)
+
+### GAP-002 — Multi-tenancy architecture (CORE BUSINESS MODEL)
+- **Problem**: All customers share one global KnowledgeGraph and one vector store. A hospital in Delhi and a pharmacy in Mumbai cannot have isolated KBs.
+- **Action**: Design a `tenant_id` system. Each tenant gets: isolated SQLite KG, isolated ChromaDB collection, isolated BM25 index, isolated config (`tenant.yaml`). Orchestrator is initialized per-tenant at request time (or cached per tenant).
+- **Test**: Two tenants with different KBs, queries to each return tenant-specific data with zero bleed.
+- **Stress test**: 10 tenants, 50 concurrent requests, no cross-contamination.
+- **Status**: ✅ Done (2026-04-04)
+
+### GAP-003 — KB Admin Interface (THE PRODUCT)
+- **Problem**: Loading a customer's knowledge base requires manually editing JSON files. Not shippable.
+- **Action**: Build an admin panel (FastAPI + simple HTML, or extend `frontend_web/`) where the customer (or Aman during setup) can: upload their drug formulary CSV, add custom schemes/facts, import ICD-10 subset, trigger KB rebuild, and see KB stats (record counts per domain).
+- **Test**: Upload a CSV → verify rows appear in KG queries.
+- **Status**: ✅ Done (2026-04-04)
+
+### GAP-004 — Full test suite
+- **Problem**: Essentially zero automated tests. Can't call it shippable software without them.
+- **Action**:
+  - `tests/unit/` — KG query functions, intent parser, cache eviction, RRF merge
+  - `tests/integration/` — Orchestrator end-to-end with mock LLM (no Ollama dependency)
+  - `tests/eval/` — golden Q&A harness (started: `eval_knowledge_graph.py`)
+  - `tests/load/` — locust load test (50 concurrent users, 5-minute sustained)
+- **Test**: `pytest` passes clean. Locust P95 latency < 3s under 50 users.
+- **Status**: ⬜ Not started (eval harness skeleton exists)
+
+### GAP-005 — Audit logging
+- **Problem**: No record of what was asked and what was answered. In healthcare this is a legal and safety requirement.
+- **Action**: Log every query to SQLite: `tenant_id`, `session_id`, `message_hash`, `intent`, `route`, `latency_ms`, `timestamp`. No PII in the log — only hash. Admin panel shows aggregate stats.
+- **Test**: 100 queries logged, query the log via admin panel.
+- **Status**: ✅ Done (2026-04-04)
+  - `app/audit.py` — thread-safe `AuditLog`, SHA-256 message hash (first 16 chars), never raises
+  - Wired into all `Orchestrator.process()` return paths (emergency, cache, KG hit, LLM)
+  - `TenantManager` creates one shared `AuditLog` at `data/audit.db`, passes it to all orchestrators
+  - Admin endpoints: `GET /admin/audit/stats`, `GET /admin/audit/recent?limit=N`
+  - 17 unit tests + 8 integration tests — 148 total, all green
+
+### GAP-006 — Confidence scoring + graceful degradation
+- **Problem**: Low-confidence LLM responses are returned with the same authority as KG-backed facts.
+- **Action**: Add a `confidence` field to `PipelineResult`. KG hits = 1.0, direct LLM = 0.5–0.7 based on response length/hedging heuristics. If confidence < threshold, append a stronger "please consult a doctor" warning and flag in the UI.
+- **Test**: Nonsense query returns low confidence + escalated disclaimer.
+- **Status**: ✅ Done (2026-04-04)
+  - `_score_llm_confidence(response)` — heuristic scorer (base 0.65, hedge/length penalties, numeric boost, clamped 0.30–0.85)
+  - Route-based assignment: emergency/KG/static = 1.0; LLM = heuristic score
+  - `LOW_CONFIDENCE_THRESHOLD = 0.60` — below this, escalated disclaimer appended
+  - `_ResponseCache.get()` now returns `(text, confidence)` tuple; confidence preserved across cache hits
+  - `confidence` field in `PipelineResult.to_dict()` and `ChatResponse` API model
+  - 19 new tests (scorer, disclaimers, pipeline integration) — 167 total, all green
+
+### GAP-007 — Stress testing + memory profiling
+- **Problem**: No performance baseline. Unknown behaviour under sustained load on target hardware (8GB RAM laptop).
+- **Action**: Run locust against a real deployment on M4 Air (16GB). Profile memory over 30-minute run — detect leaks in `_retriever_cache` and `_ResponseCache`. Document P50/P95/P99 latency per route.
+- **Test**: No OOM in 30-minute run. P95 < 3s for KG/cache routes, < 8s for LLM routes.
+- **Status**: ⬜ Not started
+
+### GAP-008 — Session persistence
+- **Problem**: Server restart wipes all conversation history (stored in-memory). Also `_retriever_cache` and `_ResponseCache` are lost.
+- **Action**: Persist sessions to SQLite. Warm the response cache from SQLite on startup (top-N most recent entries).
+- **Test**: Restart server mid-conversation, verify history survives.
+- **Status**: ⬜ Not started (in backlog)
+
+### GAP-009 — Installer hardening
+- **Problem**: `installer/setup.sh` exists but is not stress-tested. Edge cases: no internet, Ollama already running on different port, Python 3.11 vs 3.12 differences, Windows path spaces.
+- **Action**: Test on a clean VM (macOS, Ubuntu, Windows). Add pre-flight checks (port availability, disk space, Python version). Add an `--update` flag for existing installations.
+- **Status**: ⬜ Not started
+
+### GAP-010 — WhatsApp bridge
+- **Problem**: Phase 7 deferred. High value for Indian market (WhatsApp is the primary communication channel).
+- **Action**: Twilio Cloud API webhook → FastAPI `/webhook` → Orchestrator. Not Baileys (policy risk).
+- **Status**: ⬜ Deferred (tackle after GAP-001 through GAP-005 are done)
+
+---
+
+## 📊 Functionality Weight Matrix
+
+Evaluated 2026-04-03. Weight = Impact × Frequency × Risk (1–10 scale).
+Higher weight = prioritise first. Re-evaluate when a new phase ships.
+
+| # | Feature | Status | Impact | Frequency | Risk if Absent | **Weight** |
+|---|---------|--------|--------|-----------|----------------|-----------|
+| 1 | Emergency Detection | ✅ Complete | Life-safety | Low | Life-threatening | **10** |
+| 2 | Safety Guardrails (disclaimers) | ✅ Basic | Legal/medical | High | Legal liability | **9** |
+| 3 | Knowledge Graph Lookup | ✅ Improved | No-LLM answers | High | High LLM cost | **8** |
+| 4 | Hybrid RAG (BM25 + Vector + Rerank) | ✅ Complete | Doc QA quality | Medium | Poor doc answers | **8** |
+| 5 | Response Cache (LLM) | ✅ Implemented | Latency + cost | High | Repeat LLM calls | **8** |
+| 6 | Intent Classification | ✅ Fast LLM | Routing accuracy | High | Misrouted queries | **7** |
+| 7 | Language Detection | ✅ Rule-based | Hindi support | Medium | Wrong language | **6** |
+| 8 | Eval Harness (golden tests) | ✅ Implemented | Quality guard | Continuous | Silent regressions | **6** |
+| 9 | OCR / Image Analysis | ⚠️ Partial | Prescription reads | Medium | Can't process images | **6** |
+| 10 | LLMOps Observability | ⚠️ Latency only | Quality tracking | Always | No quality visibility | **5** |
+| 11 | LLM Fallback / Resilience | ⚠️ Tiers only | Reliability | Low | Single point failure | **4** |
+
+### Next gaps to close (ordered by weight)
+- **OCR (weight 6)**: EasyOCR is integrated but prescription/lab image paths are only wired when `ocr_text` is passed externally. End-to-end auto-OCR on upload is not yet live.
+- **LLMOps (weight 5)**: Add structured metrics — user satisfaction (thumbs up/down), cache hit rate logged per session, KG hit rate. Needs a lightweight feedback endpoint.
+- **LLM Fallback (weight 4)**: Auto-fallback from `main_model → fast_model` on Ollama timeout. Low priority as local Ollama has no rate limits.
 
 ---
 
@@ -237,4 +374,102 @@ python training/finetune.py
 python training/export_to_ollama.py
 ```
 
-*Last updated: 2026-04-03*
+### 2026-04-03 (4) — Code simplification + LLM app patterns (weight-based)
+
+**Code simplification (`/simplify-code`)**
+- `app/knowledge/graph.py`: moved `import re` to module level (was repeated inside 4 methods); hoisted `_INTERACTION_SIGNALS`, `_STOPWORDS`, `_DI_STOPWORDS` to module-level constants; `_DI_STOPWORDS` now composes from `_FTS_STOPWORDS` instead of duplicating the shared core.
+- `healthypartner_backend.py`: moved `import time` / `import re` from inside `/chat` handler to module top; pre-compiled `<think>` strip regex as module-level `_THINK_RE`.
+- `app/main.py`: corrected misleading CORS comment (`"any local port"` → accurate wildcard warning).
+
+**LLM app patterns — weight-based prioritisation**
+
+Evaluated 11 functional areas (see Weight Matrix section above). Top two gaps:
+
+**Weight 8 — Response Cache** (`app/orchestrator.py`)
+- Added `_ResponseCache` class: SHA-256 keyed, 30-min TTL, max 500 entries, FIFO+expired eviction.
+- Cache check fires after emergency detection (step 2) but before intent classification (step 3) — saves 2 LLM calls per cache hit (~800–2000 ms).
+- Cache is bypassed for `has_document=True` and `ocr_text` queries (document-specific, must not bleed across users).
+- Route field set to `"cache"` on hit — visible in step trace for monitoring.
+
+**Weight 6 — Eval Harness** (`tests/eval_knowledge_graph.py`)
+- 12 golden test cases across 4 categories: drug interactions, medicine alternatives, lab results, government schemes.
+- Each case specifies `must_contain` and `must_not` tokens — tests both recall and false-positive suppression.
+- `skip=True` flag keeps known data gaps visible without blocking CI.
+- Run: `python -m tests.eval_knowledge_graph --verbose`
+
+### 2026-04-04 — GAP-001: Flask backend eliminated
+
+- **Deleted** `healthypartner_backend.py` (Flask) — one backend, one truth
+- **Migrated** 3 unique endpoints into `app/main.py` (FastAPI):
+  - `POST /healthypartner/generate` — LLM-powered question template generation
+  - `POST /webhook` — Twilio WhatsApp/SMS stub (Phase 7 ready)
+  - `POST /test` — debug echo endpoint
+- **Added** `GenerateRequest` / `GenerateResponse` Pydantic models
+- **Added** `Request` to FastAPI imports (needed for raw form/JSON webhook parsing)
+- **Removed** `flask` from `requirements.txt`; added `python-multipart` (required for FastAPI form data — Twilio sends form-encoded webhooks)
+- **Result**: Single FastAPI server on port 8000 handles all endpoints. All queries go through the 7-step Orchestrator pipeline including emergency detection and safety guardrails.
+
+### 2026-04-04 (2) — GAP-002: Multi-tenancy
+
+**New file: `app/tenant.py`**
+- `TenantConfig` dataclass — loads from `tenants/{tenant_id}/config.yaml`; safe defaults derived from `tenant_id`; `resolved_kg_db_path`, `resolved_vector_store_base`, `download_dir` properties
+- `TenantManager` — lazily initialises and caches one `Orchestrator` + `KnowledgeGraph` per tenant; `reload_tenant()` evicts cache for hot-reload after KB updates
+- `validate_tenant_id()` — strict regex `^[a-zA-Z0-9_-]{1,64}$` prevents path traversal
+- Default tenant maps to legacy paths (`data/knowledge.db`, `./db/`) — zero-migration backward compat
+
+**New file: `tenants/default/config.yaml`** — explicit config for the default single-tenant deployment
+
+**Modified: `app/ingestion.py`**
+- `process_and_get_retriever()` now accepts `base_path` param (default = legacy `./db`)
+- Cache key changed from `document_id` → `(base_path, document_id)` tuple — ensures no cross-tenant cache bleed
+
+**Modified: `app/main.py`**
+- Global `orchestrator` replaced with `TenantManager`
+- `get_orchestrator()` FastAPI dependency reads `X-Tenant-ID` header (defaults to `"default"`)
+- `get_tenant_config()` FastAPI dependency for tenant-scoped paths
+- `/chat`, `/hackrx/run`, `/healthypartner/run` all use `Depends(get_orchestrator)` + `Depends(get_tenant_config)`
+- Document uploads scoped to `downloaded_files/{tenant_id}/`
+- Vector stores scoped to `db/{tenant_id}/{document_id}/`
+- New endpoints: `GET /tenants`, `POST /tenants/{tenant_id}/reload`
+
+**How to onboard a new customer:**
+1. Create `tenants/{tenant_id}/config.yaml` with their name and optional KB path overrides
+2. Load their knowledge base into `tenants/{tenant_id}/knowledge.db`
+3. Call `POST /tenants/{tenant_id}/reload` (or restart server)
+4. All their API calls pass `X-Tenant-ID: {tenant_id}` — fully isolated
+
+### 2026-04-04 (3) — GAP-003: KB Admin Interface
+
+**`app/knowledge/graph.py`** — added KB mutation methods:
+- `import_csv_medicines(rows)` — bulk insert, skips rows missing required fields, rebuilds FTS
+- `import_csv_interactions(rows)` — bulk insert drug interactions
+- `import_csv_facts(rows)` — bulk insert facts/schemes with auto category upsert
+- `import_csv_icd10(rows)` — bulk insert ICD-10 symptom→condition mappings
+- `_rebuild_fts()` — rebuilds all three FTS5 indexes after data changes
+- `reset_and_reload()` — clears all KB data and reloads from source JSON files
+- `_safe_float()` module-level helper for CSV numeric parsing
+
+**`app/admin.py`** — new FastAPI router mounted at `/admin`:
+- `GET  /admin`                    → Admin HTML panel
+- `GET  /admin/kb/stats`           → Record counts per domain (tenant-aware)
+- `POST /admin/kb/upload/medicines`     → CSV upload
+- `POST /admin/kb/upload/interactions`  → CSV upload
+- `POST /admin/kb/upload/facts`         → CSV upload
+- `POST /admin/kb/upload/icd10`         → CSV upload
+- `POST /admin/kb/rebuild`         → Rebuild FTS indexes
+- `POST /admin/kb/reset`           → Clear + reload from JSON
+- Auth: `X-Admin-Key` header vs `HP_ADMIN_KEY` env var (no-op if key not set)
+- Uses `request.app.state.tenant_manager` — no circular imports
+
+**`app/main.py`** — `app.state.tenant_manager` set in lifespan; `admin_router` included
+
+**`frontend_web/admin.html`** — minimal dark admin panel:
+- Stats dashboard (5 domain counts, auto-refreshed)
+- 4 CSV upload sections with column hints (drag-and-drop ready)
+- Rebuild FTS + Reset KB buttons with confirmation
+- Tenant ID + Admin Key fields in header
+- No build tools — vanilla JS, works immediately
+
+**Access:** `http://localhost:8000/admin`
+
+*Last updated: 2026-04-04*

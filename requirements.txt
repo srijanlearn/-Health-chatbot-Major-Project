@@ -39,5 +39,6 @@ easyocr
 streamlit
 
 # ── Messaging (WhatsApp/SMS) ───────────────────────────────────────────────────
-flask
+# flask removed — all endpoints now on FastAPI (app/main.py)
 twilio
+python-multipart                # required for FastAPI form data (Twilio webhook)

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,39 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data"
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    """Convert a value to float, returning None if conversion fails."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+# Keywords that signal a drug-interaction query regardless of intent.
+# Patient safety: interaction warnings must surface first.
+_INTERACTION_SIGNALS = (
+    "interaction", "together", "mix", "combine",
+    " with ", "safe to take", "can i take",
+)
+
+# Common noise words that cause too many false-positive FTS matches.
+_FTS_STOPWORDS: frozenset[str] = frozenset({
+    "what", "is", "the", "for", "how", "does", "are", "can", "about",
+    "my", "me", "your", "this", "that", "these", "those", "its",
+    "normal", "abnormal", "level", "levels", "range", "value", "values",
+    "high", "low", "result", "results", "test", "check", "please",
+    "help", "need", "want", "know", "tell", "give", "show",
+})
+
+# Additional stopwords for drug-interaction token extraction.
+_DI_STOPWORDS: frozenset[str] = _FTS_STOPWORDS | frozenset({
+    "take", "with", "safe", "use", "mix", "together", "combine",
+    "interact", "interaction", "drug", "medicine", "medication",
+    "pill", "tablet", "and", "have", "should",
+})
 
 
 class KnowledgeGraph:
@@ -255,21 +289,53 @@ class KnowledgeGraph:
 
     # ── Query Methods ──────────────────────────────────────────────────────────
 
-    def query(self, question: str) -> Optional[str]:
+    def query(self, question: str, intent: str = "") -> Optional[str]:
         """
         Try to answer a question from structured knowledge.
 
         Returns a formatted answer string, or None if no relevant data found.
+
+        Args:
+            question: The user's question.
+            intent: Classified intent (e.g. 'lab_results', 'symptom_check') —
+                    used to reorder domain searches for better relevance.
         """
         q_lower = question.lower()
 
-        # Try each knowledge domain
-        answer = (
-            self._query_facts(q_lower)
-            or self._query_medicines(q_lower)
-            or self._query_drug_interactions(q_lower)
-            or self._query_icd10(q_lower)
-        )
+        # Drug interaction signals take priority over intent-based ordering
+        # because patient safety requires showing interaction warnings first.
+        if any(kw in q_lower for kw in _INTERACTION_SIGNALS):
+            answer = (
+                self._query_drug_interactions(q_lower)
+                or self._query_medicines(q_lower)
+                or self._query_facts(q_lower)
+                or self._query_icd10(q_lower)
+            )
+        # Prescription / drug-specific intent → interactions first, then alternatives
+        elif intent == "prescription_info":
+            answer = (
+                self._query_drug_interactions(q_lower)
+                or self._query_medicines(q_lower)
+                or self._query_icd10(q_lower)
+                or self._query_facts(q_lower)
+            )
+        # Lab/symptom intents → ICD10 first (avoid IRDAI false matches on
+        # clinical terms like "hemoglobin", "creatinine", "normal range")
+        elif intent in ("lab_results", "symptom_check", "general_health"):
+            answer = (
+                self._query_icd10(q_lower)
+                or self._query_medicines(q_lower)
+                or self._query_drug_interactions(q_lower)
+                or self._query_facts(q_lower)
+            )
+        # Insurance, govt schemes, unknown → IRDAI/PMJAY facts first
+        else:
+            answer = (
+                self._query_facts(q_lower)
+                or self._query_medicines(q_lower)
+                or self._query_drug_interactions(q_lower)
+                or self._query_icd10(q_lower)
+            )
 
         return answer
 
@@ -277,12 +343,12 @@ class KnowledgeGraph:
         """Search IRDAI/PMJAY facts using full-text search."""
         cur = self._conn.cursor()
         # Strip punctuation so FTS5 doesn't choke on "surgery?" etc.
-        import re
         clean = re.sub(r"[^\w\s]", " ", query)
-        # Clean query for FTS
+        # Clean query for FTS — require tokens to be reasonably specific.
+        # Append * for prefix matching so "cataract" matches "cataracts" etc.
         fts_query = " OR ".join(
-            w for w in clean.split()
-            if len(w) > 2 and w not in ("what", "is", "the", "for", "how", "does", "are", "can", "about")
+            w + "*" for w in clean.split()
+            if len(w) > 3 and w not in _FTS_STOPWORDS
         )
         if not fts_query:
             return None
@@ -313,7 +379,6 @@ class KnowledgeGraph:
 
     def _query_medicines(self, query: str) -> Optional[str]:
         """Search generic medicine alternatives."""
-        import re
         clean = re.sub(r"[^\w\s]", " ", query)
         cur = self._conn.cursor()
 
@@ -325,8 +390,8 @@ class KnowledgeGraph:
         rows = cur.fetchall()
 
         if not rows:
-            # Try FTS
-            fts_query = " OR ".join(w for w in clean.split() if len(w) > 2)
+            # Try FTS with prefix matching
+            fts_query = " OR ".join(w + "*" for w in clean.split() if len(w) > 2)
             if not fts_query:
                 return None
             try:
@@ -359,13 +424,30 @@ class KnowledgeGraph:
         return "\n".join(parts)
 
     def _query_drug_interactions(self, query: str) -> Optional[str]:
-        """Search for drug interaction warnings."""
+        """Search for drug interaction warnings.
+
+        Searches each word from the query individually so full-sentence
+        queries like "can I take aspirin with warfarin?" correctly match
+        drug_a='Warfarin' and drug_b='Aspirin'.
+        """
         cur = self._conn.cursor()
 
+        # Extract candidate drug tokens: longer words, skip common stopwords
+        words = [
+            w.lower() for w in re.sub(r"[^\w\s]", " ", query).split()
+            if len(w) > 3 and w.lower() not in _DI_STOPWORDS
+        ]
+        if not words:
+            return None
+
+        # Build OR query across all candidate tokens
+        placeholders = " OR ".join(
+            "LOWER(drug_a) LIKE ? OR LOWER(drug_b) LIKE ?" for _ in words
+        )
+        params = [v for w in words for v in (f"%{w}%", f"%{w}%")]
         cur.execute(
-            "SELECT * FROM drug_interactions "
-            "WHERE LOWER(drug_a) LIKE ? OR LOWER(drug_b) LIKE ? LIMIT 5",
-            (f"%{query}%", f"%{query}%"),
+            f"SELECT * FROM drug_interactions WHERE {placeholders} LIMIT 5",
+            params,
         )
         rows = cur.fetchall()
 
@@ -389,16 +471,17 @@ class KnowledgeGraph:
     def _query_icd10(self, query: str) -> Optional[str]:
         """Search symptom → condition mapping."""
         cur = self._conn.cursor()
+        clean = re.sub(r"[^\w\s]", " ", query)
 
         # Direct symptom search
         cur.execute(
             "SELECT * FROM icd10_map WHERE LOWER(symptom) LIKE ? LIMIT 5",
-            (f"%{query}%",),
+            (f"%{clean}%",),
         )
         rows = cur.fetchall()
 
         if not rows:
-            fts_query = " OR ".join(w for w in query.split() if len(w) > 3)
+            fts_query = " OR ".join(w + "*" for w in clean.split() if len(w) > 3)
             if not fts_query:
                 return None
             try:
@@ -444,6 +527,185 @@ class KnowledgeGraph:
             cur.execute(f"SELECT COUNT(*) FROM {table}")
             stats[table] = cur.fetchone()[0]
         return stats
+
+    # ── CSV Import Methods ─────────────────────────────────────────────────────
+
+    def import_csv_medicines(self, rows: List[Dict[str, Any]]) -> int:
+        """
+        Bulk-insert medicine rows parsed from a CSV upload.
+
+        Expected columns: brand_name, generic_name, generic_name_hi (opt),
+        category (opt), jan_aushadhi_price (opt), market_price (opt),
+        savings_percent (opt), usage (opt).
+
+        Returns the number of rows successfully inserted.
+        """
+        cur = self._conn.cursor()
+        count = 0
+        for row in rows:
+            brand = row.get("brand_name", "").strip()
+            generic = row.get("generic_name", "").strip()
+            if not brand or not generic:
+                continue
+            try:
+                cur.execute(
+                    "INSERT INTO medicines (brand_name, generic_name, generic_name_hi, "
+                    "category, jan_aushadhi_price, market_price, savings_percent, usage) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        brand,
+                        generic,
+                        row.get("generic_name_hi", ""),
+                        row.get("category", ""),
+                        _safe_float(row.get("jan_aushadhi_price")),
+                        _safe_float(row.get("market_price")),
+                        _safe_float(row.get("savings_percent")),
+                        row.get("usage", ""),
+                    ),
+                )
+                count += 1
+            except Exception:
+                logger.warning("Skipping medicine row: %s", row)
+        self._conn.commit()
+        self._rebuild_fts()
+        return count
+
+    def import_csv_interactions(self, rows: List[Dict[str, Any]]) -> int:
+        """
+        Bulk-insert drug interaction rows from a CSV upload.
+
+        Expected columns: drug_a, drug_b, severity (mild/moderate/severe),
+        description, recommendation (opt).
+        """
+        cur = self._conn.cursor()
+        count = 0
+        for row in rows:
+            drug_a = row.get("drug_a", "").strip()
+            drug_b = row.get("drug_b", "").strip()
+            severity = row.get("severity", "moderate").strip().lower()
+            description = row.get("description", "").strip()
+            if not drug_a or not drug_b or not description:
+                continue
+            try:
+                cur.execute(
+                    "INSERT INTO drug_interactions (drug_a, drug_b, severity, description, recommendation) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (drug_a, drug_b, severity, description, row.get("recommendation", "")),
+                )
+                count += 1
+            except Exception:
+                logger.warning("Skipping interaction row: %s", row)
+        self._conn.commit()
+        return count
+
+    def import_csv_facts(self, rows: List[Dict[str, Any]]) -> int:
+        """
+        Bulk-insert fact rows from a CSV upload.
+
+        Expected columns: category_id, category_name, key, value,
+        key_hi (opt), value_hi (opt), source (opt), tags (opt, comma-separated).
+        """
+        cur = self._conn.cursor()
+        count = 0
+        for row in rows:
+            cat_id = row.get("category_id", "").strip()
+            cat_name = row.get("category_name", cat_id).strip()
+            key = row.get("key", "").strip()
+            value = row.get("value", "").strip()
+            if not cat_id or not key or not value:
+                continue
+            try:
+                cur.execute(
+                    "INSERT OR IGNORE INTO categories (id, name) VALUES (?, ?)",
+                    (cat_id, cat_name),
+                )
+                tags_raw = row.get("tags", "")
+                tags = json.dumps([t.strip() for t in tags_raw.split(",") if t.strip()])
+                cur.execute(
+                    "INSERT INTO facts (category_id, key, key_hi, value, value_hi, source, tags) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        cat_id,
+                        key,
+                        row.get("key_hi", ""),
+                        value,
+                        row.get("value_hi", ""),
+                        row.get("source", ""),
+                        tags,
+                    ),
+                )
+                count += 1
+            except Exception:
+                logger.warning("Skipping fact row: %s", row)
+        self._conn.commit()
+        self._rebuild_fts()
+        return count
+
+    def import_csv_icd10(self, rows: List[Dict[str, Any]]) -> int:
+        """
+        Bulk-insert ICD-10 symptom→condition rows from a CSV upload.
+
+        Expected columns: symptom, icd10_code, condition_name,
+        symptom_hi (opt), condition_name_hi (opt), severity (opt),
+        see_doctor_urgency (opt: immediate/within_24h/within_week/routine).
+        """
+        cur = self._conn.cursor()
+        count = 0
+        for row in rows:
+            symptom = row.get("symptom", "").strip()
+            code = row.get("icd10_code", "").strip()
+            condition = row.get("condition_name", "").strip()
+            if not symptom or not code or not condition:
+                continue
+            try:
+                cur.execute(
+                    "INSERT INTO icd10_map (symptom, symptom_hi, icd10_code, condition_name, "
+                    "condition_name_hi, severity, see_doctor_urgency) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        symptom,
+                        row.get("symptom_hi", ""),
+                        code,
+                        condition,
+                        row.get("condition_name_hi", ""),
+                        row.get("severity", ""),
+                        row.get("see_doctor_urgency", "routine"),
+                    ),
+                )
+                count += 1
+            except Exception:
+                logger.warning("Skipping ICD-10 row: %s", row)
+        self._conn.commit()
+        self._rebuild_fts()
+        return count
+
+    def _rebuild_fts(self) -> None:
+        """Rebuild all FTS5 indexes after data changes."""
+        cur = self._conn.cursor()
+        cur.executescript("""
+            INSERT INTO facts_fts(facts_fts) VALUES('rebuild');
+            INSERT INTO medicines_fts(medicines_fts) VALUES('rebuild');
+            INSERT INTO icd10_fts(icd10_fts) VALUES('rebuild');
+        """)
+        self._conn.commit()
+        logger.info("FTS indexes rebuilt")
+
+    def reset_and_reload(self) -> None:
+        """
+        Clear all KB data and reload from the default JSON files.
+
+        Use after replacing the source JSON files to force a full refresh.
+        """
+        cur = self._conn.cursor()
+        cur.executescript("""
+            DELETE FROM facts;
+            DELETE FROM medicines;
+            DELETE FROM drug_interactions;
+            DELETE FROM icd10_map;
+            DELETE FROM categories;
+        """)
+        self._conn.commit()
+        self._load_data()
+        logger.info("KB reset and reloaded from JSON files")
 
     def close(self) -> None:
         """Close the database connection."""

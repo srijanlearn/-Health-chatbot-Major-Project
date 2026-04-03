@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HealthyPartner - Premium Local AI Healthcare</title>
+    <meta name="description" content="Local, privacy-first healthcare AI assistant running completely offline on your own hardware.">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="index.css">
+</head>
+<body class="dark-theme">
+    
+    <!-- Background Decorators for Glassmorphism -->
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
+    
+    <div class="app-container">
+        
+        <!-- Sidebar -->
+        <aside class="sidebar glass-panel" id="sidebar">
+            <div class="sidebar-header">
+                <h1><span class="icon">💚</span> HealthyPartner</h1>
+                <p class="subtitle">Privacy-first local AI</p>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>System Status</h3>
+                <div class="status-item">
+                    <span class="status-dot tooltip" id="status-ollama" aria-label="Ollama connection status"></span>
+                    <span class="status-label">Ollama Backend</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-dot tooltip" id="status-model-main" aria-label="Main LLM Status"></span>
+                    <span class="status-label" id="label-model-main">Main Model</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-dot tooltip" id="status-model-fast" aria-label="Fast LLM Status"></span>
+                    <span class="status-label" id="label-model-fast">Fast Model</span>
+                </div>
+                <button class="btn btn-secondary btn-icon mt-sm" id="btn-refresh" aria-label="Refresh Status">
+                    ↺ Refresh
+                </button>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>📎 Document Context</h3>
+                <div class="upload-area" id="drop-zone">
+                    <input type="file" id="file-upload" accept="application/pdf" hidden>
+                    <label for="file-upload" class="upload-label">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        <span>Upload PDF</span>
+                        <small>Insurance, Lab, Prescription</small>
+                    </label>
+                </div>
+                <div id="active-doc-info" class="doc-info hidden">
+                    <div class="doc-badge align-center">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                        <span id="doc-name" class="truncate">report.pdf</span>
+                    </div>
+                    <button class="btn btn-danger btn-sm" id="btn-remove-doc" aria-label="Remove Document">✕ Remove</button>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="sys-info">
+                    <p id="sys-tier">Tier: Detecting...</p>
+                    <p id="sys-hardware">RAM: -- GB · GPU: --</p>
+                </div>
+                <div class="settings-group">
+                    <input type="text" id="api-base-url" class="input-modern" value="http://localhost:8000" aria-label="API Endpoint URL" title="API Endpoint URL">
+                    <button class="btn btn-secondary btn-sm" id="btn-clear-chat" aria-label="Clear Chat History">Clear Chat</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-main glass-panel">
+            <header class="chat-header">
+                <div class="header-titles">
+                    <h2>🏥 Clinical Assistant</h2>
+                    <p id="chat-subtitle">General Health Mode (No Document)</p>
+                </div>
+            </header>
+            
+            <div class="chat-messages" id="chat-messages">
+                <!-- Welcome State -->
+                <div class="empty-state" id="empty-state">
+                    <div class="empty-icon">💚</div>
+                    <h3>How can I help you today?</h3>
+                    <p>Ask about health insurance, prescriptions, lab reports, or general health.</p>
+                    <p class="small-text">Upload a PDF in the sidebar for document-specific questions.</p>
+                </div>
+                <!-- Dynamic messages go here -->
+            </div>
+            
+            <div class="typing-indicator hidden" id="typing-indicator">
+                <span></span><span></span><span></span>
+            </div>
+
+            <div class="chat-input-area">
+                <form id="chat-form" class="input-form">
+                    <input type="text" id="chat-input" placeholder="Ask a health question..." required autocomplete="off" aria-label="Chat Input">
+                    <button type="submit" class="btn btn-primary btn-send" aria-label="Send Message">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -187,6 +187,10 @@ class LLMEngine:
         self.fast_model = fast_model or os.getenv("HP_FAST_MODEL") or tier_config["fast_model"]
 
         # Generation defaults
+        # think=False: disable Qwen3 extended thinking mode.
+        # By default Qwen3 enters <think>...</think> reasoning which Ollama
+        # strips from the response, leaving an empty string for many queries.
+        # We enable thinking selectively via the think=True argument to generate().
         self._main_opts = {
             "temperature": 0.3,
             "num_ctx": 4096,
@@ -279,12 +283,12 @@ class LLMEngine:
             think: If True, prepend a "think step-by-step" instruction (Qwen3 think mode).
         """
         opts = {**self._main_opts, **(options or {})}
+        # Remove think from opts if present — it's a top-level chat() param, not an option
+        opts.pop("think", None)
         messages: List[Dict[str, str]] = []
 
         # System prompt
         sys_content = system_prompt
-        if think:
-            sys_content += "\n\nThink step-by-step before answering."
         if sys_content:
             messages.append({"role": "system", "content": sys_content})
 
@@ -303,6 +307,7 @@ class LLMEngine:
                 model=self.main_model,
                 messages=messages,
                 options=opts,
+                think=think,   # top-level Ollama param for Qwen3 thinking mode
             )
             return response["message"]["content"].strip()
         except Exception:

@@ -20,11 +20,13 @@ Pipeline:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from .audit import AuditLog
 from .llm_engine import LLMEngine
 from .knowledge.graph import KnowledgeGraph
 from .prompts.intent_classifier import (
@@ -73,9 +75,121 @@ class PipelineResult:
             "route": self.route,
             "language": self.language,
             "is_emergency": self.is_emergency,
+            "confidence": round(self.confidence, 2),
             "latency_ms": round(self.latency_ms, 1),
             "steps": self.steps,
         }
+
+
+# ── Response Cache ─────────────────────────────────────────────────────────────
+
+
+class _ResponseCache:
+    """
+    In-memory TTL cache for LLM responses.
+
+    Caches (message → response) for queries that don't depend on an uploaded
+    document or OCR text.  Keyed on a SHA-256 prefix of the lowercased,
+    stripped message so near-identical phrasing reuses cached answers.
+
+    Eviction policy: expired entries first, then FIFO when at capacity.
+    Thread safety: not needed — Flask/FastAPI run each request sequentially
+    against the same engine process.
+    """
+
+    def __init__(self, ttl_seconds: int = 1800, max_size: int = 500) -> None:
+        # store: key → (response_text, confidence, expires_at)
+        self._store: Dict[str, tuple[str, float, float]] = {}
+        self._ttl = ttl_seconds
+        self._max = max_size
+
+    def _key(self, message: str) -> str:
+        return hashlib.sha256(message.lower().strip().encode()).hexdigest()[:20]
+
+    def get(self, message: str) -> Optional[tuple[str, float]]:
+        """Return (response, confidence) or None on miss/expiry."""
+        key = self._key(message)
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        response, confidence, expires_at = entry
+        if time.time() > expires_at:
+            del self._store[key]
+            return None
+        return response, confidence
+
+    def set(self, message: str, response: str, confidence: float = 1.0) -> None:
+        if len(self._store) >= self._max:
+            now = time.time()
+            # Remove all expired entries first
+            expired = [k for k, (_, _c, exp) in self._store.items() if exp < now]
+            for k in expired:
+                del self._store[k]
+            # If still at capacity, drop the oldest inserted entry
+            if len(self._store) >= self._max:
+                del self._store[next(iter(self._store))]
+        self._store[self._key(message)] = (response, confidence, time.time() + self._ttl)
+
+    @property
+    def size(self) -> int:
+        return len(self._store)
+
+
+# ── Confidence scoring ────────────────────────────────────────────────────────
+
+# Responses below this threshold get a stronger safety disclaimer appended.
+LOW_CONFIDENCE_THRESHOLD = 0.60
+
+# Hedging phrases that indicate the LLM is uncertain.
+_HEDGE_STRONG = (
+    "i'm not sure", "i am not sure", "i don't know", "i do not know",
+    "i cannot say", "i can't say", "not certain", "unclear",
+    "no information", "limited information",
+)
+_HEDGE_MILD = (
+    "it depends", "depending on", "may vary", "could be", "might be",
+    "possibly", "perhaps", "generally", "usually", "typically",
+    "approximately", "around", "about",
+)
+
+
+def _score_llm_confidence(response: str) -> float:
+    """
+    Heuristic confidence score for an LLM-generated response.
+
+    Range: 0.30 – 0.85  (1.0 is reserved for KG-backed facts)
+
+    Scoring:
+      - Base: 0.65
+      - Very short response (< 80 chars): -0.20
+      - Short response (< 160 chars): -0.08
+      - Each strong hedge phrase: -0.12  (capped at -0.24)
+      - Each mild hedge phrase:   -0.04  (capped at -0.12)
+      - Contains a number (specific fact): +0.05
+    """
+    text = response.lower()
+    score = 0.65
+
+    # Length penalty
+    if len(response) < 80:
+        score -= 0.20
+    elif len(response) < 160:
+        score -= 0.08
+
+    # Strong hedging
+    strong_hits = sum(1 for p in _HEDGE_STRONG if p in text)
+    score -= min(strong_hits * 0.12, 0.24)
+
+    # Mild hedging
+    mild_hits = sum(1 for p in _HEDGE_MILD if p in text)
+    score -= min(mild_hits * 0.04, 0.12)
+
+    # Specific number → small boost (concrete answer)
+    import re as _re
+    if _re.search(r"\b\d+(\.\d+)?\s*(mg|mcg|ml|lakh|year|day|hour|%|rupee)", text):
+        score += 0.05
+
+    return round(max(0.30, min(0.85, score)), 2)
 
 
 # ── Orchestrator ───────────────────────────────────────────────────────────────
@@ -93,10 +207,36 @@ class Orchestrator:
     # Intents that get direct responses (no LLM needed)
     STATIC_INTENTS = {"greeting", "document_upload"}
 
-    def __init__(self, engine: LLMEngine, knowledge_graph: Optional[KnowledgeGraph] = None) -> None:
+    def __init__(
+        self,
+        engine: LLMEngine,
+        knowledge_graph: Optional[KnowledgeGraph] = None,
+        audit_log: Optional[AuditLog] = None,
+    ) -> None:
         self.engine = engine
         self.knowledge_graph = knowledge_graph
+        self._audit = audit_log
+        self._cache = _ResponseCache(ttl_seconds=1800, max_size=500)
         logger.info("Orchestrator initialised with %r", engine)
+
+    # ── Audit helper ──────────────────────────────────────────────────────────
+
+    def _log_audit(
+        self,
+        result: "PipelineResult",
+        message: str,
+        tenant_id: str,
+        session_id: Optional[str],
+    ) -> None:
+        if self._audit is not None:
+            self._audit.log_query(
+                tenant_id=tenant_id,
+                message=message,
+                intent=result.intent,
+                route=result.route,
+                latency_ms=result.latency_ms,
+                session_id=session_id,
+            )
 
     # ── Main entry point ───────────────────────────────────────────────────────
 
@@ -110,6 +250,8 @@ class Orchestrator:
         ocr_text: Optional[str] = None,
         has_document: bool = False,
         is_new_user: bool = True,
+        tenant_id: str = "default",
+        session_id: Optional[str] = None,
     ) -> PipelineResult:
         """
         Run the full orchestration pipeline on a user message.
@@ -141,12 +283,32 @@ class Orchestrator:
         if check_emergency(message):
             result.is_emergency = True
             result.intent = "emergency"
+            result.route = "emergency"
+            result.confidence = 1.0
             result.response = get_emergency_response(result.language)
             result.latency_ms = _ms(start)
             steps.append({"step": "emergency_check", "result": True, "ms": _ms(t0)})
             result.steps = steps
+            self._log_audit(result, message, tenant_id, session_id)
             return result
         steps.append({"step": "emergency_check", "result": False, "ms": _ms(t0)})
+
+        # ── Cache lookup (after safety checks, before expensive LLM steps) ──────
+        # Only cache stateless queries: no uploaded document, no OCR image.
+        _cacheable = not has_document and not ocr_text
+        if _cacheable:
+            cached_response = self._cache.get(message)
+            if cached_response is not None:
+                cached_text, cached_conf = cached_response
+                result.response = cached_text
+                result.confidence = cached_conf
+                result.route = "cache"
+                result.latency_ms = _ms(start)
+                steps.append({"step": "cache", "hit": True, "ms": _ms(t0)})
+                result.steps = steps
+                logger.debug("Cache hit for message (cache_size=%d)", self._cache.size)
+                self._log_audit(result, message, tenant_id, session_id)
+                return result
 
         # ── Step 3: Intent classification (fast model) ─────────────────────────
         t0 = time.time()
@@ -166,13 +328,17 @@ class Orchestrator:
         # ── Step 4: Check knowledge graph (instant, no LLM) ───────────────────
         t0 = time.time()
         if self.knowledge_graph and intent not in self.STATIC_INTENTS:
-            kg_answer = self.knowledge_graph.query(message)
+            kg_answer = self.knowledge_graph.query(message, intent=intent)
             if kg_answer:
                 steps.append({"step": "knowledge_graph", "hit": True, "ms": _ms(t0)})
                 result.response = kg_answer
                 result.route = "knowledge_graph"
+                result.confidence = 1.0
                 result.latency_ms = _ms(start)
                 result.steps = steps
+                if _cacheable:
+                    self._cache.set(message, kg_answer, confidence=1.0)
+                self._log_audit(result, message, tenant_id, session_id)
                 return result
         steps.append({"step": "knowledge_graph", "hit": False, "ms": _ms(t0)})
 
@@ -180,15 +346,19 @@ class Orchestrator:
         if intent == "greeting":
             result.response = self._greeting_response(is_new_user, result.language)
             result.route = "static"
+            result.confidence = 1.0
             result.latency_ms = _ms(start)
             result.steps = steps
+            self._log_audit(result, message, tenant_id, session_id)
             return result
 
         if intent == "document_upload":
             result.response = self._document_upload_response(result.language)
             result.route = "static"
+            result.confidence = 1.0
             result.latency_ms = _ms(start)
             result.steps = steps
+            self._log_audit(result, message, tenant_id, session_id)
             return result
 
         # ── Step 5: Route question (keywords first, LLM fallback) ──────────────
@@ -198,6 +368,10 @@ class Orchestrator:
             # Ambiguous — use LLM router
             route_raw = self.engine.classify(message, system_prompt=ROUTER_SYSTEM_PROMPT)
             route = self._parse_route(route_raw)
+        # If keyword/LLM router says knowledge_graph but step 4 already missed,
+        # fall back to direct_llm so the route badge reflects what actually answers.
+        if route == "knowledge_graph":
+            route = "direct_llm"
         result.route = route
         steps.append({"step": "route_question", "result": route, "ms": _ms(t0)})
 
@@ -217,16 +391,31 @@ class Orchestrator:
         )
         steps.append({"step": "generate_answer", "route": route, "ms": _ms(t0)})
 
+        # ── Confidence scoring ────────────────────────────────────────────────
+        confidence = _score_llm_confidence(response)
+        result.confidence = confidence
+        steps.append({"step": "confidence_score", "score": confidence, "ms": 0})
+
         # ── Step 7: Safety guardrails ──────────────────────────────────────────
         t0 = time.time()
-        # Add medical disclaimer for health-related intents
-        if intent in ("symptom_check", "prescription_info", "lab_results", "general_health"):
-            response += get_disclaimer(result.language)
-        steps.append({"step": "safety_guardrails", "ms": _ms(t0)})
+        health_intents = ("symptom_check", "prescription_info", "lab_results", "general_health")
+        if intent in health_intents:
+            if confidence < LOW_CONFIDENCE_THRESHOLD:
+                # Low-confidence answer — escalate the disclaimer
+                response += get_disclaimer(result.language, escalated=True)
+            else:
+                response += get_disclaimer(result.language)
+        steps.append({"step": "safety_guardrails", "confidence": confidence, "ms": _ms(t0)})
 
         result.response = response
         result.latency_ms = _ms(start)
         result.steps = steps
+
+        # Store in cache for future identical queries
+        if _cacheable:
+            self._cache.set(message, response, confidence=confidence)
+
+        self._log_audit(result, message, tenant_id, session_id)
         return result
 
     # ── Route-based generation ─────────────────────────────────────────────────

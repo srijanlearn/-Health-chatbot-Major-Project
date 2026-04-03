@@ -19,13 +19,13 @@ import pickle
 from functools import lru_cache
 from typing import List, Optional, Tuple
 
-from langchain.retrievers import ParentDocumentRetriever
-from langchain.storage import InMemoryStore
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_classic.retrievers import ParentDocumentRetriever
+from langchain_classic.storage import InMemoryStore
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
@@ -212,28 +212,38 @@ class HybridRetriever:
 
 # ── Main ingestion function ────────────────────────────────────────────────────
 
-_retriever_cache: dict[str, Tuple[HybridRetriever, str]] = {}
+# Cache key: (base_path, document_id) — ensures tenant isolation
+_retriever_cache: dict[tuple[str, str], Tuple[HybridRetriever, str]] = {}
 
 
 def process_and_get_retriever(
     document_path: str,
     document_id: str,
+    base_path: str = DB_BASE_PATH,
 ) -> Tuple[Optional[HybridRetriever], Optional[str]]:
     """
     Process a PDF and return a HybridRetriever + full text.
 
     Caches both the vector store and BM25 index on disk.
-    Subsequent calls with the same document_id reuse existing indexes.
+    Subsequent calls with the same (base_path, document_id) reuse existing indexes.
+
+    Args:
+        document_path: Absolute path to the PDF file.
+        document_id:   Unique identifier for the document (used as storage key).
+        base_path:     Root directory for this tenant's vector store and BM25 indexes.
+                       Defaults to DB_BASE_PATH for backward compatibility.
 
     Returns:
         (HybridRetriever, full_document_text) or (None, None) on failure.
     """
-    # In-memory cache
-    if document_id in _retriever_cache:
-        logger.info("Cache hit for document_id=%s", document_id)
-        return _retriever_cache[document_id]
+    cache_key = (base_path, document_id)
 
-    db_path = os.path.join(DB_BASE_PATH, document_id)
+    # In-memory cache
+    if cache_key in _retriever_cache:
+        logger.info("Cache hit for document_id=%s (base=%s)", document_id, base_path)
+        return _retriever_cache[cache_key]
+
+    db_path = os.path.join(base_path, document_id)
     bm25_path = os.path.join(db_path, "bm25_index.pkl")
     full_text_path = os.path.join(db_path, "full_text.txt")
     os.makedirs(db_path, exist_ok=True)
@@ -320,7 +330,7 @@ def process_and_get_retriever(
         )
 
         retriever = HybridRetriever(parent_retriever, _bm25, _bm25_docs)
-        _retriever_cache[document_id] = (retriever, full_text_out)
+        _retriever_cache[cache_key] = (retriever, full_text_out)
 
         logger.info(
             "✅ HybridRetriever ready for document_id=%s (BM25=%s, Reranker=%s)",

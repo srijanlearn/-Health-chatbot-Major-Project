@@ -16,20 +16,29 @@ import base64
 from typing import List, Optional
 from contextlib import asynccontextmanager
 
+# Load .env before any module reads os.environ
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path as _Path
+    load_dotenv(_Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 import requests as http_requests
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .audit import AuditLog
 from .llm_engine import LLMEngine, detect_system
-from .orchestrator import Orchestrator
+from .tenant import TenantManager, TenantConfig, validate_tenant_id, DEFAULT_TENANT_ID
 from .ingestion import process_and_get_retriever
-from .knowledge.graph import KnowledgeGraph
+from .admin import router as admin_router
 
 # ── Configuration ───────────────────────────────────────────────────────────────
 
 DOWNLOAD_PATH = "./downloaded_files"
-DB_BASE_PATH = "./db"
-KG_DB_PATH = "./data/knowledge.db"
 
 # ── Request / Response models ───────────────────────────────────────────────────
 
@@ -55,37 +64,50 @@ class ChatResponse(BaseModel):
     route: str
     language: str
     is_emergency: bool
+    confidence: float
     latency_ms: float
+
+
+class GenerateRequest(BaseModel):
+    prompt: str
+    n: int = Field(default=5, ge=1, le=20)
+
+
+class GenerateResponse(BaseModel):
+    questions: List[str]
 
 
 # ── App lifespan ────────────────────────────────────────────────────────────────
 
 engine: Optional[LLMEngine] = None
-orchestrator: Optional[Orchestrator] = None
+tenant_manager: Optional[TenantManager] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine, orchestrator
+    global engine, tenant_manager
     print("🏥 HealthyPartner v2 starting up...")
     os.makedirs(DOWNLOAD_PATH, exist_ok=True)
-    os.makedirs(DB_BASE_PATH, exist_ok=True)
-    os.makedirs(os.path.dirname(KG_DB_PATH), exist_ok=True)
 
-    # Local LLM engine (no API keys needed)
+    # Audit log — shared across all tenants, single SQLite file
+    audit_log = AuditLog()
+    app.state.audit_log = audit_log
+    print("   AuditLog: ✅")
+
+    # Local LLM engine — shared across all tenants
     engine = LLMEngine()
     status = engine.ensure_models_available()
     print(f"   Engine: {engine}")
     print(f"   Models: main={'✅' if status['main_model'] else '❌'} "
           f"fast={'✅' if status['fast_model'] else '❌'}")
 
-    # Knowledge graph (Indian healthcare data — instant lookups, no LLM needed)
-    kg = KnowledgeGraph(db_path=KG_DB_PATH)
-    print("   Knowledge graph: ✅")
-
-    # Orchestrator wires engine + KG into the 7-step pipeline
-    orchestrator = Orchestrator(engine=engine, knowledge_graph=kg)
-    print("   Orchestrator: ✅")
+    # Tenant manager — one Orchestrator + KG per tenant, lazily initialised
+    tenant_manager = TenantManager(engine=engine, audit_log=audit_log)
+    # Warm up the default tenant so the first real request isn't slow
+    tenant_manager.get_orchestrator(DEFAULT_TENANT_ID)
+    # Expose via app.state so admin router can access without circular imports
+    app.state.tenant_manager = tenant_manager
+    print(f"   TenantManager: ✅ (default tenant warmed up)")
     print("   Ready.\n")
     yield
     print("Server shutting down.")
@@ -97,6 +119,48 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+# CORS — open to all origins (local dev only; restrict before any network-exposed deployment)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Admin router — KB management at /admin/*
+app.include_router(admin_router)
+
+# Serve the web frontend at /app (e.g. http://localhost:8000/app/)
+_FRONTEND_DIR = str(_Path(__file__).parent.parent / "frontend_web")
+if _Path(_FRONTEND_DIR).exists():
+    app.mount("/app", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
+
+
+# ── Tenant dependency ───────────────────────────────────────────────────────────
+
+
+def get_orchestrator(x_tenant_id: str = Header(default=DEFAULT_TENANT_ID)):
+    """
+    FastAPI dependency that resolves the correct Orchestrator for the request.
+
+    Reads the X-Tenant-ID header (defaults to "default" for backward compat).
+    Returns 400 on invalid tenant_id, 503 if the server isn't ready yet.
+    """
+    if tenant_manager is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    if not validate_tenant_id(x_tenant_id):
+        raise HTTPException(status_code=400, detail="Invalid X-Tenant-ID header")
+    return tenant_manager.get_orchestrator(x_tenant_id)
+
+
+def get_tenant_config(x_tenant_id: str = Header(default=DEFAULT_TENANT_ID)) -> TenantConfig:
+    """Resolves the TenantConfig for the request."""
+    if tenant_manager is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    if not validate_tenant_id(x_tenant_id):
+        raise HTTPException(status_code=400, detail="Invalid X-Tenant-ID header")
+    return tenant_manager.get_config(x_tenant_id)
 
 
 # ── Health & system endpoints ───────────────────────────────────────────────────
@@ -147,23 +211,27 @@ async def list_models():
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    orchestrator=Depends(get_orchestrator),
+    x_tenant_id: str = Header(default=DEFAULT_TENANT_ID),
+):
     """
     Free-form healthcare chat.
 
     Runs the full 7-step orchestration pipeline:
     language detection → emergency check → intent classify →
     knowledge graph lookup → routing → retrieval → generation → safety guardrails.
-    """
-    if orchestrator is None:
-        raise HTTPException(status_code=503, detail="Orchestrator not ready")
 
+    Pass X-Tenant-ID header to route to a specific tenant's knowledge base.
+    Defaults to "default" tenant for backward compatibility.
+    """
     # Format conversation history as a string for the LLM context window
     history_str = ""
     is_new_user = not bool(request.conversation_history)
     if request.conversation_history:
         lines = []
-        for turn in request.conversation_history[-6:]:  # last 3 turns (6 messages)
+        for turn in request.conversation_history[-6:]:
             role = turn.get("role", "")
             content = turn.get("content", "")
             if role and content:
@@ -175,6 +243,7 @@ async def chat(request: ChatRequest):
         conversation_history=history_str,
         has_document=False,
         is_new_user=is_new_user,
+        tenant_id=x_tenant_id,
     )
 
     return ChatResponse(
@@ -183,6 +252,7 @@ async def chat(request: ChatRequest):
         route=result.route,
         language=result.language,
         is_emergency=result.is_emergency,
+        confidence=round(result.confidence, 2),
         latency_ms=result.latency_ms,
     )
 
@@ -191,30 +261,34 @@ async def chat(request: ChatRequest):
 
 
 @app.post("/hackrx/run", response_model=RunResponse, tags=["Q&A"])
-async def run_submission(request: RunRequest):
+async def run_submission(
+    request: RunRequest,
+    orchestrator=Depends(get_orchestrator),
+    tenant_config: TenantConfig = Depends(get_tenant_config),
+):
     """Backward-compatible endpoint (original hackathon route)."""
-    return await _process_document_qa(request)
+    return await _process_document_qa(request, orchestrator, tenant_config)
 
 
 @app.post("/healthypartner/run", response_model=RunResponse, tags=["Q&A"])
-async def healthypartner_run(request: RunRequest):
+async def healthypartner_run(
+    request: RunRequest,
+    orchestrator=Depends(get_orchestrator),
+    tenant_config: TenantConfig = Depends(get_tenant_config),
+):
     """Answer questions about a PDF document using the full orchestration pipeline."""
-    return await _process_document_qa(request)
+    return await _process_document_qa(request, orchestrator, tenant_config)
 
 
-async def _process_document_qa(request: RunRequest) -> RunResponse:
+async def _process_document_qa(request: RunRequest, orchestrator, tenant_config: TenantConfig) -> RunResponse:
     """
     Core document Q&A logic shared by both endpoints.
 
-    For each question, runs the full orchestrator pipeline with:
-    - retrieved_chunks from HybridRetriever (BM25 + vector + cross-encoder rerank)
-    - full_document_text for specific fact queries
+    Documents are stored under the tenant's download directory.
+    Vector stores and BM25 indexes are scoped to the tenant's vector_store_base.
     """
-    if orchestrator is None:
-        raise HTTPException(status_code=503, detail="Orchestrator not ready")
-
-    # Download or decode document
-    local_filename = os.path.join(DOWNLOAD_PATH, str(uuid.uuid4()) + ".pdf")
+    # Store uploaded document under tenant-scoped directory
+    local_filename = os.path.join(tenant_config.download_dir, str(uuid.uuid4()) + ".pdf")
     try:
         if request.is_base64:
             file_content = base64.b64decode(request.documents)
@@ -228,16 +302,20 @@ async def _process_document_qa(request: RunRequest) -> RunResponse:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to process document: {e}")
 
-    # Ingest document → HybridRetriever + full text
+    # Ingest into tenant-scoped vector store
     document_id = os.path.splitext(os.path.basename(local_filename))[0]
-    retriever, full_text = process_and_get_retriever(local_filename, document_id)
+    retriever, full_text = process_and_get_retriever(
+        local_filename,
+        document_id,
+        base_path=tenant_config.resolved_vector_store_base,
+    )
     if not retriever:
         raise HTTPException(status_code=500, detail="Failed to process document.")
 
     # Answer each question via orchestrator (full 7-step pipeline)
     answers = []
     for question in request.questions:
-        print(f"--- Answering: {question} ---")
+        print(f"--- Answering [{tenant_config.tenant_id}]: {question} ---")
         try:
             retrieved_docs = retriever.invoke(question)
             retrieved_chunks = [doc.page_content for doc in retrieved_docs]
@@ -248,12 +326,100 @@ async def _process_document_qa(request: RunRequest) -> RunResponse:
                 full_document_text=full_text,
                 has_document=True,
             )
-            print(
-                f"    Route: {result.route} | Intent: {result.intent} | {result.latency_ms:.0f}ms"
-            )
+            print(f"    Route: {result.route} | Intent: {result.intent} | {result.latency_ms:.0f}ms")
             answers.append(result.response)
         except Exception as e:
             answers.append(f"Error processing question: {e}")
             print(f"    Error: {e}")
 
     return RunResponse(answers=answers)
+
+
+# ── Question generation ─────────────────────────────────────────────────────────
+
+
+@app.post("/healthypartner/generate", response_model=GenerateResponse, tags=["Q&A"])
+async def generate_questions(req: GenerateRequest):
+    """Generate question templates from a short topic prompt."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    if not req.prompt.strip():
+        return GenerateResponse(questions=[f"Generic question #{i + 1}" for i in range(req.n)])
+
+    sys_prompt = (
+        f"Generate exactly {req.n} specific questions someone might ask about "
+        f"a health insurance policy related to: {req.prompt}. "
+        f"Return only the questions, one per line, numbered."
+    )
+    raw = engine.generate(prompt=f"Topic: {req.prompt}", system_prompt=sys_prompt)
+    questions = [
+        line.strip().lstrip("0123456789.-) ")
+        for line in raw.split("\n")
+        if line.strip() and not line.strip().startswith("#")
+    ][: req.n]
+
+    return GenerateResponse(questions=questions)
+
+
+# ── Tenant management endpoints ─────────────────────────────────────────────────
+
+
+@app.get("/tenants", tags=["Tenants"])
+async def list_tenants():
+    """List all registered tenants."""
+    if tenant_manager is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    return {"tenants": tenant_manager.list_tenants()}
+
+
+@app.post("/tenants/{tenant_id}/reload", tags=["Tenants"])
+async def reload_tenant(tenant_id: str):
+    """
+    Evict a tenant's orchestrator from cache and force re-initialisation.
+
+    Call this after updating a tenant's knowledge base or config file.
+    """
+    if tenant_manager is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    if not validate_tenant_id(tenant_id):
+        raise HTTPException(status_code=400, detail="Invalid tenant_id")
+    tenant_manager.reload_tenant(tenant_id)
+    return {"status": "reloaded", "tenant_id": tenant_id}
+
+
+# ── Integrations ────────────────────────────────────────────────────────────────
+
+
+@app.post("/webhook", tags=["Integrations"])
+async def webhook(request: Request):
+    """
+    Twilio WhatsApp/SMS webhook entrypoint (Phase 7 — stub).
+
+    Accepts both form-encoded (Twilio default) and JSON payloads.
+    Full implementation deferred until GAP-010.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        form = await request.form()
+        data = dict(form)
+    return {"status": "received", "data": data}
+
+
+# ── Debug ───────────────────────────────────────────────────────────────────────
+
+
+@app.post("/test", tags=["System"])
+async def test_endpoint(request: Request):
+    """Echo endpoint for local debugging — returns request body + engine info."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return {
+        "ok": True,
+        "echo": body,
+        "engine": str(engine),
+        "tier": engine.tier if engine else None,
+    }

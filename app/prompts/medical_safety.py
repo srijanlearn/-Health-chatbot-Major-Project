@@ -29,6 +29,21 @@ DISCLAIMER_HI = (
     "उचित निदान और उपचार के लिए कृपया किसी योग्य चिकित्सक से परामर्श करें।*"
 )
 
+# Escalated disclaimer — used when confidence < LOW_CONFIDENCE_THRESHOLD
+DISCLAIMER_ESCALATED = (
+    "\n\n🔴 **Important:** I am not confident in this answer. The information "
+    "above may be incomplete or inaccurate. **Please consult a qualified doctor "
+    "or pharmacist before taking any action.** Do not rely on this response for "
+    "medical decisions."
+)
+
+DISCLAIMER_ESCALATED_HI = (
+    "\n\n🔴 **महत्वपूर्ण:** मुझे इस उत्तर पर पूरा विश्वास नहीं है। ऊपर दी गई "
+    "जानकारी अधूरी या गलत हो सकती है। **कोई भी कदम उठाने से पहले कृपया किसी "
+    "योग्य डॉक्टर या फार्मासिस्ट से परामर्श लें।** चिकित्सा निर्णयों के लिए "
+    "इस उत्तर पर निर्भर न रहें।"
+)
+
 # Emergency response — bypasses LLM entirely
 EMERGENCY_RESPONSE = (
     "🚨 **This sounds like a medical emergency.**\n\n"
@@ -76,8 +91,10 @@ def detect_language(text: str) -> str:
     return "en"
 
 
-def get_disclaimer(lang: str = "en") -> str:
-    """Get disclaimer in the appropriate language."""
+def get_disclaimer(lang: str = "en", escalated: bool = False) -> str:
+    """Get disclaimer in the appropriate language.  escalated=True for low-confidence responses."""
+    if escalated:
+        return DISCLAIMER_ESCALATED_HI if lang == "hi" else DISCLAIMER_ESCALATED
     return DISCLAIMER_HI if lang == "hi" else DISCLAIMER
 
 

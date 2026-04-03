@@ -1,0 +1,5 @@
+# Default tenant — used when no X-Tenant-ID header is sent.
+# Maps to legacy single-tenant paths for backward compatibility.
+name: "HealthyPartner Default"
+kg_db_path: "data/knowledge.db"
+vector_store_base: "./db"
