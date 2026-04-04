@@ -433,7 +433,36 @@ async def webhook(request: Request):
     return {"status": "received", "data": data}
 
 
-# ── Debug ───────────────────────────────────────────────────────────────────────
+# ── Debug / profiling ───────────────────────────────────────────────────────────
+
+
+@app.get("/debug/stats", tags=["System"])
+async def debug_stats():
+    """
+    Runtime stats for memory profiling and stress-test monitoring.
+
+    Returns process RSS, per-tenant cache sizes, and session count.
+    Not for production exposure — intended for local load-test tooling.
+    """
+    import os as _os
+    import psutil as _psutil
+
+    proc = _psutil.Process(_os.getpid())
+    mem = proc.memory_info()
+
+    cache_sizes: dict = {}
+    if tenant_manager is not None:
+        for tid, orch in tenant_manager._cache.items():
+            cache_sizes[tid] = {
+                "response_cache": orch._cache.size if hasattr(orch, "_cache") else -1,
+            }
+
+    return {
+        "rss_mb": round(mem.rss / 1_048_576, 1),
+        "vms_mb": round(mem.vms / 1_048_576, 1),
+        "session_count": session_manager.get_active_session_count() if session_manager else 0,
+        "tenant_caches": cache_sizes,
+    }
 
 
 @app.post("/test", tags=["System"])

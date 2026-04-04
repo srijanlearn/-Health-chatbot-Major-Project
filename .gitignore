@@ -85,3 +85,6 @@ logs/
 training/outputs/
 training/checkpoints/
 *.jsonl.bak
+
+# Load test results
+tests/load/results/
