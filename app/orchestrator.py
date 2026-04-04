@@ -130,6 +130,16 @@ class _ResponseCache:
                 del self._store[next(iter(self._store))]
         self._store[self._key(message)] = (response, confidence, time.time() + self._ttl)
 
+    def warm(self, entries: List[tuple[str, str, float]]) -> int:
+        """Preload recent query/response pairs into the cache."""
+        added = 0
+        for message, response, confidence in entries:
+            if not message or not response:
+                continue
+            self.set(message, response, confidence=confidence)
+            added += 1
+        return added
+
     @property
     def size(self) -> int:
         return len(self._store)
@@ -218,6 +228,28 @@ class Orchestrator:
         self._audit = audit_log
         self._cache = _ResponseCache(ttl_seconds=1800, max_size=500)
         logger.info("Orchestrator initialised with %r", engine)
+
+    def warm_response_cache(
+        self,
+        entries: List[tuple[str, str, float]] | List[tuple[str, str]],
+    ) -> int:
+        """
+        Preload the in-memory cache from persisted recent conversations.
+
+        Entries may be ``(message, response)`` or ``(message, response, confidence)``.
+        """
+        prepared: List[tuple[str, str, float]] = []
+        for entry in entries:
+            if len(entry) == 2:
+                message, response = entry
+                prepared.append((message, response, _score_llm_confidence(response)))
+            else:
+                message, response, confidence = entry
+                prepared.append((message, response, confidence))
+        warmed = self._cache.warm(prepared)
+        if warmed:
+            logger.info("Warmed response cache with %d entries", warmed)
+        return warmed
 
     # ── Audit helper ──────────────────────────────────────────────────────────
 

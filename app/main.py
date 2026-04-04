@@ -35,6 +35,7 @@ from .llm_engine import LLMEngine, detect_system
 from .tenant import TenantManager, TenantConfig, validate_tenant_id, DEFAULT_TENANT_ID
 from .ingestion import process_and_get_retriever
 from .admin import router as admin_router
+from .session_manager import SessionManager
 
 # ── Configuration ───────────────────────────────────────────────────────────────
 
@@ -55,10 +56,12 @@ class RunResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: Optional[str] = None
     conversation_history: Optional[List[dict]] = None  # [{"role": "user"|"assistant", "content": "..."}]
 
 
 class ChatResponse(BaseModel):
+    session_id: str
     response: str
     intent: str
     route: str
@@ -81,11 +84,22 @@ class GenerateResponse(BaseModel):
 
 engine: Optional[LLMEngine] = None
 tenant_manager: Optional[TenantManager] = None
+session_manager: Optional[SessionManager] = None
+
+
+def _warm_recent_caches(session_store: SessionManager, manager: TenantManager) -> None:
+    """Hydrate per-tenant response caches from persisted session history."""
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for pair in session_store.recent_query_pairs(limit=200):
+        grouped.setdefault(pair["tenant_id"], []).append((pair["message"], pair["response"]))
+
+    for tenant_id, entries in grouped.items():
+        manager.get_orchestrator(tenant_id).warm_response_cache(entries)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine, tenant_manager
+    global engine, tenant_manager, session_manager
     print("🏥 HealthyPartner v2 starting up...")
     os.makedirs(DOWNLOAD_PATH, exist_ok=True)
 
@@ -103,11 +117,15 @@ async def lifespan(app: FastAPI):
 
     # Tenant manager — one Orchestrator + KG per tenant, lazily initialised
     tenant_manager = TenantManager(engine=engine, audit_log=audit_log)
+    session_manager = SessionManager()
+    app.state.session_manager = session_manager
     # Warm up the default tenant so the first real request isn't slow
     tenant_manager.get_orchestrator(DEFAULT_TENANT_ID)
+    _warm_recent_caches(session_manager, tenant_manager)
     # Expose via app.state so admin router can access without circular imports
     app.state.tenant_manager = tenant_manager
     print(f"   TenantManager: ✅ (default tenant warmed up)")
+    print(f"   SessionManager: ✅ ({session_manager.get_active_session_count()} active in memory)")
     print("   Ready.\n")
     yield
     print("Server shutting down.")
@@ -226,17 +244,20 @@ async def chat(
     Pass X-Tenant-ID header to route to a specific tenant's knowledge base.
     Defaults to "default" tenant for backward compatibility.
     """
-    # Format conversation history as a string for the LLM context window
-    history_str = ""
-    is_new_user = not bool(request.conversation_history)
-    if request.conversation_history:
-        lines = []
-        for turn in request.conversation_history[-6:]:
-            role = turn.get("role", "")
-            content = turn.get("content", "")
-            if role and content:
-                lines.append(f"{role.capitalize()}: {content}")
-        history_str = "\n".join(lines)
+    if session_manager is None:
+        raise HTTPException(status_code=503, detail="Session manager not ready")
+
+    session_id = request.session_id or uuid.uuid4().hex
+    session = session_manager.get_or_create_session(session_id, tenant_id=x_tenant_id)
+    if request.conversation_history and not session["conversation_history"]:
+        session_manager.import_conversation_history(
+            session_id,
+            request.conversation_history,
+            tenant_id=x_tenant_id,
+        )
+
+    history_str = session_manager.format_history_for_llm(session_id, last_n=6)
+    is_new_user = len(session_manager.get_conversation_history(session_id)) == 0
 
     result = orchestrator.process(
         message=request.message,
@@ -244,9 +265,14 @@ async def chat(
         has_document=False,
         is_new_user=is_new_user,
         tenant_id=x_tenant_id,
+        session_id=session_id,
     )
 
+    session_manager.add_message(session_id, "user", request.message)
+    session_manager.add_message(session_id, "assistant", result.response)
+
     return ChatResponse(
+        session_id=session_id,
         response=result.response,
         intent=result.intent,
         route=result.route,
