@@ -36,10 +36,12 @@ DB_BASE_PATH = "./db"
 # v2: multilingual embeddings for Hindi+English documents
 EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 
-# v2: smaller chunks for 4B model context window
-PARENT_CHUNK_SIZE = 1500   # was 2000
-CHILD_CHUNK_SIZE = 300     # was 400
-CHUNK_OVERLAP = 50
+# Chunk sizes tuned for hybrid retrieval + cross-encoder rerank on 4B context window.
+# Smaller child chunks = finer-grained retrieval precision; reranker handles ordering.
+# Smaller parent = fits cleaner inside 3072-token context budget.
+PARENT_CHUNK_SIZE = 1000   # was 1500
+CHILD_CHUNK_SIZE = 200     # was 300
+CHUNK_OVERLAP = 40         # was 50 (~20% of child size)
 
 # Retrieval settings
 INITIAL_RETRIEVE_K = 20    # broad net
@@ -54,10 +56,16 @@ def get_embeddings() -> HuggingFaceEmbeddings:
     global _embeddings
     if _embeddings is None:
         logger.info("Loading embeddings model: %s", EMBEDDING_MODEL)
+        # Use MPS (Apple Metal) for 3-5x faster document ingestion on Apple Silicon.
+        # For single-query retrieval the MPS transfer overhead can exceed the speedup,
+        # so we keep MPS only — benchmark your hardware if queries feel slower.
+        import torch as _torch
+        _device = "mps" if _torch.backends.mps.is_available() else "cpu"
+        logger.info("Embeddings device: %s", _device)
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
+            model_kwargs={"device": _device},
+            encode_kwargs={"normalize_embeddings": True, "batch_size": 32},
         )
     return _embeddings
 
@@ -86,29 +94,42 @@ def get_reranker():
 def _reciprocal_rank_fusion(
     vector_docs: List[Document],
     bm25_docs: List[Document],
-    k: int = 60,
+    k: int = 40,
 ) -> List[Document]:
     """
     Merge vector and BM25 results using Reciprocal Rank Fusion.
 
     RRF score = sum(1 / (k + rank)) across all result lists.
     Deduplicates by content and preserves original Document objects.
+
+    k=40 (was 60): slightly more aggressive top-rank weighting, better for
+    healthcare text where exact medical terms (drug names, ICD codes) dominate.
+
+    Dedup key uses source + content prefix to avoid false merges on docs
+    that share boilerplate headers (e.g. repeated policy preamble text).
     """
+    import hashlib as _hashlib
+
     scores: dict[str, float] = {}
     doc_map: dict[str, Document] = {}
 
+    def _key(doc: Document) -> str:
+        source = doc.metadata.get("source", "")
+        raw = f"{source}|{doc.page_content[:150]}"
+        return _hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
+
     for rank, doc in enumerate(vector_docs):
-        key = doc.page_content[:200]
+        key = _key(doc)
         scores[key] = scores.get(key, 0) + 1 / (k + rank + 1)
         doc_map[key] = doc
 
     for rank, doc in enumerate(bm25_docs):
-        key = doc.page_content[:200]
+        key = _key(doc)
         scores[key] = scores.get(key, 0) + 1 / (k + rank + 1)
         doc_map[key] = doc
 
     sorted_keys = sorted(scores, key=lambda x: scores[x], reverse=True)
-    return [doc_map[k] for k in sorted_keys]
+    return [doc_map[key] for key in sorted_keys]
 
 
 def _rerank(query: str, docs: List[Document], top_k: int = RERANK_TOP_K) -> List[Document]:

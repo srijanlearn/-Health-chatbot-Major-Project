@@ -10,6 +10,8 @@ Changes from previous version:
 - Document Q&A endpoint now uses orchestrator.process() for the full 7-step pipeline
 """
 
+import asyncio
+import functools
 import os
 import uuid
 import base64
@@ -36,6 +38,8 @@ from .tenant import TenantManager, TenantConfig, validate_tenant_id, DEFAULT_TEN
 from .ingestion import process_and_get_retriever
 from .admin import router as admin_router
 from .session_manager import SessionManager
+from .prompts.insurance_qa import INSURANCE_SYSTEM_PROMPT
+from .prompts.intent_classifier import INTENT_SYSTEM_PROMPT
 
 # ── Configuration ───────────────────────────────────────────────────────────────
 
@@ -97,6 +101,28 @@ def _warm_recent_caches(session_store: SessionManager, manager: TenantManager) -
         manager.get_orchestrator(tenant_id).warm_response_cache(entries)
 
 
+def _ollama_kv_warmup(llm_engine: LLMEngine) -> None:
+    """
+    Send a cheap dummy inference to prime the Metal GPU shader cache and
+    warm the Ollama KV cache for our fixed system prompts.
+
+    On Apple Silicon, the first Metal kernel dispatch after startup incurs
+    shader compilation (~500ms–2s).  Running this in a background thread
+    absorbs that latency before the first real user request arrives.
+
+    Prefix caching discipline: our system prompts are byte-for-byte identical
+    across all requests, so Ollama reuses their KV state on every subsequent call.
+    Dynamic content (user query, RAG chunks) always comes last — never embedded
+    in the prefix — so it never busts the cache.
+    """
+    try:
+        llm_engine.classify("ping", system_prompt=INTENT_SYSTEM_PROMPT)
+        llm_engine.generate("ping", system_prompt=INSURANCE_SYSTEM_PROMPT,
+                            options={"num_predict": 1})
+    except Exception:
+        pass  # warmup failure is non-fatal
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global engine, tenant_manager, session_manager
@@ -126,8 +152,16 @@ async def lifespan(app: FastAPI):
     app.state.tenant_manager = tenant_manager
     print(f"   TenantManager: ✅ (default tenant warmed up)")
     print(f"   SessionManager: ✅ ({session_manager.get_active_session_count()} active in memory)")
+
+    # Fire Ollama KV warmup in a background thread — absorbs Metal shader
+    # compilation before first real user request, does not delay startup.
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _ollama_kv_warmup, engine)
+    print("   Ollama KV warmup: ⏳ (running in background)")
+
     print("   Ready.\n")
     yield
+    engine.close()
     print("Server shutting down.")
 
 
@@ -259,7 +293,11 @@ async def chat(
     history_str = session_manager.format_history_for_llm(session_id, last_n=6)
     is_new_user = len(session_manager.get_conversation_history(session_id)) == 0
 
-    result = orchestrator.process(
+    # Run the synchronous orchestrator pipeline in a thread pool so the
+    # uvicorn event loop remains free to serve other requests concurrently
+    # (health checks, admin endpoints, other sessions).
+    fn = functools.partial(
+        orchestrator.process,
         message=request.message,
         conversation_history=history_str,
         has_document=False,
@@ -267,6 +305,7 @@ async def chat(
         tenant_id=x_tenant_id,
         session_id=session_id,
     )
+    result = await asyncio.get_event_loop().run_in_executor(None, fn)
 
     session_manager.add_message(session_id, "user", request.message)
     session_manager.add_message(session_id, "assistant", result.response)

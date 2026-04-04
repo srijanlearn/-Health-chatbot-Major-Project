@@ -171,7 +171,25 @@ class LLMEngine:
             )
 
         self._host = ollama_host
-        self._client = OllamaClient(host=ollama_host)
+
+        # Explicit httpx client: keep-alive connections + hard timeouts.
+        # Without this, a hung Ollama process blocks request threads indefinitely.
+        try:
+            import httpx as _httpx
+            self._http_client: Optional[Any] = _httpx.Client(
+                base_url=ollama_host,
+                timeout=_httpx.Timeout(connect=2.0, read=120.0, write=10.0, pool=5.0),
+                limits=_httpx.Limits(
+                    max_connections=5,
+                    max_keepalive_connections=3,
+                    keepalive_expiry=60.0,
+                ),
+            )
+            self._client = OllamaClient(host=ollama_host, httpx_client=self._http_client)
+        except (TypeError, Exception):
+            # Fallback: older Ollama SDK versions don't accept httpx_client
+            self._http_client = None
+            self._client = OllamaClient(host=ollama_host)
         self._system_info = detect_system()
 
         # Resolve tier
@@ -191,14 +209,19 @@ class LLMEngine:
         # By default Qwen3 enters <think>...</think> reasoning which Ollama
         # strips from the response, leaving an empty string for many queries.
         # We enable thinking selectively via the think=True argument to generate().
+        #
+        # num_ctx=3072: reduces KV cache from ~1.5GB (4096) to ~1.1GB — meaningful
+        # on 8-16GB unified memory while still covering system prompt + 5 turns + RAG chunks.
+        # num_batch=1024: doubles prefill throughput vs. default 512.
         self._main_opts = {
             "temperature": 0.3,
-            "num_ctx": 4096,
+            "num_ctx": 3072,
             "num_predict": 512,
+            "num_batch": 1024,
         }
         self._fast_opts = {
             "temperature": 0.0,
-            "num_ctx": 2048,
+            "num_ctx": 1024,
             "num_predict": 64,
         }
 
@@ -352,6 +375,14 @@ class LLMEngine:
         except Exception:
             logger.exception("generate_stream() failed")
             yield "I'm sorry, I encountered an error. Please try again."
+
+    def close(self) -> None:
+        """Release the underlying httpx connection pool."""
+        if self._http_client is not None:
+            try:
+                self._http_client.close()
+            except Exception:
+                pass
 
     # ── Model management ───────────────────────────────────────────────────────
 
